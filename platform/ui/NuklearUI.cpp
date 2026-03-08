@@ -10,10 +10,10 @@
 #define NK_INCLUDE_VERTEX_BUFFER_OUTPUT
 #define NK_INCLUDE_FONT_BAKING
 #define NK_INCLUDE_DEFAULT_FONT
-// NOTE: Do NOT define NK_IMPLEMENTATION or NK_GLFW_GL3_IMPLEMENTATION here
-// Those are defined in a separate .cpp file or by the user
-#include "../../../game_libs/Nuklear/nuklear.h"
-#include "../../../game_libs/Nuklear/demo/glfw_opengl3/nuklear_glfw_gl3.h"
+// NOTE: Do NOT define NK_IMPLEMENTATION or NK_GLFW_GL3_IMPLEMENTATION here (see NuklearImpl.cpp)
+// Use NUKLEAR_DIR include path set by parent CMake
+#include "nuklear.h"
+#include "demo/glfw_opengl3/nuklear_glfw_gl3.h"
 
 using EngineLogging::Logger;
 

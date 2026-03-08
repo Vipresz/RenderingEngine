@@ -19,6 +19,9 @@ set(PLATFORM_SOURCES
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
     input/InputSystem.cpp
+    utils/ConsoleRedirect.cpp
+    ui/NuklearUI.cpp
+    ui/NuklearImpl.cpp
 )
 
 # Create STATIC library for platform layer (since we have .cpp files)
@@ -28,6 +31,9 @@ target_include_directories(Platform PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>  # For engine headers
 )
+if(DEFINED NUKLEAR_DIR)
+    target_include_directories(Platform PRIVATE ${NUKLEAR_DIR} ${NUKLEAR_DIR}/demo/glfw_opengl3)
+endif()
 
 target_compile_features(Platform PUBLIC cxx_std_17)
 
@@ -54,12 +60,16 @@ else()
     set(USE_HOMEBREW FALSE)
 endif()
 
-# Set base path to game_libs directory (Windows fallback)
+# Set base path for dependencies: use parent's DEPS_BASE (e.g. project libs/) when set, else game_libs
 get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-get_filename_component(GAMES_DIR "${PROJECT_ROOT}/.." ABSOLUTE)
-set(GAME_LIBS_DIR "${GAMES_DIR}/game_libs")
-
-message(STATUS "Using game_libs directory: ${GAME_LIBS_DIR}")
+if(DEFINED DEPS_BASE)
+    set(GAME_LIBS_DIR "${DEPS_BASE}")
+    message(STATUS "Using dependencies directory (from parent): ${GAME_LIBS_DIR}")
+else()
+    get_filename_component(GAMES_DIR "${PROJECT_ROOT}/.." ABSOLUTE)
+    set(GAME_LIBS_DIR "${GAMES_DIR}/game_libs")
+    message(STATUS "Using game_libs directory: ${GAME_LIBS_DIR}")
+endif()
 
 # ============================================================================
 # Copy required header files
