@@ -44,6 +44,11 @@ public:
     // Get the height of the model (top - bottom)
     float GetHeight() const { return m_maxY - m_minY; }
     
+    /// Largest axis extent used for uniform "fit to target size" scaling (same length unit as
+    /// scene grid and ui_defaults objects.size_default). Skips thin plates, then removes
+    /// outlier mesh extents so a huge floor does not shrink the main subject.
+    float GetUniformScaleReferenceExtent() const;
+    
     // Create a simple plane programmatically (for ground, etc.)
     // sizeX, sizeZ: dimensions of the plane
     void CreatePlane(float sizeX, float sizeZ);

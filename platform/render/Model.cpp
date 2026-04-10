@@ -6,6 +6,7 @@
 #include <limits>
 #include <map>
 #include <string>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace Engine {
@@ -454,6 +455,84 @@ void Model::GetBounds(float& minX, float& maxX, float& minY, float& maxY, float&
     maxY = m_maxY;
     minZ = m_minZ;
     maxZ = m_maxZ;
+}
+
+namespace {
+
+float MeshMaxExtentAndAxes(const std::vector<glm::vec3>& pos,
+                           float& outSx, float& outSy, float& outSz) {
+    if (pos.empty()) {
+        outSx = outSy = outSz = 0.0f;
+        return 0.0f;
+    }
+    glm::vec3 mn = pos[0];
+    glm::vec3 mx = pos[0];
+    for (const glm::vec3& p : pos) {
+        mn = glm::min(mn, p);
+        mx = glm::max(mx, p);
+    }
+    outSx = mx.x - mn.x;
+    outSy = mx.y - mn.y;
+    outSz = mx.z - mn.z;
+    return std::max(outSx, std::max(outSy, outSz));
+}
+
+bool MeshIsLikelyThinPlate(float sx, float sy, float sz) {
+    const float maxD = std::max(sx, std::max(sy, sz));
+    const float minD = std::min(sx, std::min(sy, sz));
+    if (maxD < 1e-6f) {
+        return true;
+    }
+    return minD < 0.05f * maxD;
+}
+
+} // namespace
+
+float Model::GetUniformScaleReferenceExtent() const {
+    const float combined =
+        std::max(m_maxX - m_minX, std::max(m_maxY - m_minY, m_maxZ - m_minZ));
+
+    if (m_vertexPositions.empty()) {
+        return combined;
+    }
+
+    // Per-mesh max extents. Skip thin plates (large ground planes) first; if that removes
+    // everything, include all meshes so single-plane assets still work.
+    auto collectExtents = [this](bool skipThinPlates) -> std::vector<float> {
+        std::vector<float> extents;
+        for (const auto& pos : m_vertexPositions) {
+            if (pos.empty()) {
+                continue;
+            }
+            float sx = 0.0f;
+            float sy = 0.0f;
+            float sz = 0.0f;
+            const float ext = MeshMaxExtentAndAxes(pos, sx, sy, sz);
+            if (skipThinPlates && MeshIsLikelyThinPlate(sx, sy, sz)) {
+                continue;
+            }
+            extents.push_back(ext);
+        }
+        return extents;
+    };
+
+    std::vector<float> extents = collectExtents(true);
+    if (extents.empty()) {
+        extents = collectExtents(false);
+    }
+    if (extents.empty()) {
+        return combined;
+    }
+
+    // Drop obvious outliers (e.g. one huge mesh vs. a character): if the largest extent is
+    // many times the next, remove it until stable. Matches world units to the main subject.
+    std::sort(extents.begin(), extents.end(), std::greater<float>());
+    constexpr float kOutlierRatio = 5.0f;
+    while (extents.size() >= 2 && extents[0] >= kOutlierRatio * extents[1]) {
+        extents.erase(extents.begin());
+    }
+
+    return extents[0];
 }
 
 std::string Model::GetBoneNameByIndex(unsigned int meshBoneIndex) const {

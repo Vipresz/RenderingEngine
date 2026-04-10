@@ -60,8 +60,11 @@ else()
     set(USE_HOMEBREW FALSE)
 endif()
 
-# Set base path for dependencies: use parent's DEPS_BASE (e.g. project libs/) when set, else game_libs
+# Project root: RenderingEngine may live at repo/RenderingEngine or repo/external/RenderingEngine
 get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+if(NOT EXISTS "${PROJECT_ROOT}/CMakeLists.txt")
+    get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+endif()
 if(DEFINED DEPS_BASE)
     set(GAME_LIBS_DIR "${DEPS_BASE}")
     message(STATUS "Using dependencies directory (from parent): ${GAME_LIBS_DIR}")
@@ -158,20 +161,26 @@ if(USE_HOMEBREW)
         endif()
     endif()
 else()
-    # Windows: Build from source
-set(GLFW_ROOT "${GAME_LIBS_DIR}/glfw-3.4")
-set(GLFW_INCLUDE_DIR "${GLFW_ROOT}/include")
+    # Windows: Build from source (parent may set GLFW_ROOT, e.g. camera_system2/libs/glfw-3.4)
+    if(NOT GLFW_ROOT)
+        set(GLFW_ROOT "${GAME_LIBS_DIR}/glfw-3.4")
+    endif()
+    set(GLFW_INCLUDE_DIR "${GLFW_ROOT}/include")
 
 if(EXISTS "${GLFW_INCLUDE_DIR}/GLFW/glfw3.h")
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    
+    # Match AstralWorlds / stock GLFW: do not force STATIC here. Forcing STATIC while the root
+    # CMake still copied vcpkg's glfw3.dll next to the exe led to loading the wrong DLL (mixed ABI).
+
     add_subdirectory("${GLFW_ROOT}" "${CMAKE_BINARY_DIR}/glfw" EXCLUDE_FROM_ALL)
     target_include_directories(glfw INTERFACE ${GLFW_INCLUDE_DIR})
     target_link_libraries(Platform PUBLIC glfw)
-    message(STATUS "Found GLFW (building from source): ${GLFW_ROOT}")
+    get_target_property(_GLFW_TGT_TYPE glfw TYPE)
+    message(STATUS "Found GLFW (building from source): ${GLFW_ROOT} (target type: ${_GLFW_TGT_TYPE})")
+    message(STATUS "  If you previously forced STATIC and copied vcpkg glfw3.dll, delete ${CMAKE_BINARY_DIR}/glfw and reconfigure.")
         set(GLFW_FOUND_LOCAL TRUE)
     endif()
 endif()
@@ -297,7 +306,7 @@ else()
             add_custom_command(TARGET Platform POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${ASSIMP_DLL}"
-                $<TARGET_FILE_DIR:Game>
+                "$<TARGET_FILE_DIR:Platform>"
             )
             endif()
         endif()
