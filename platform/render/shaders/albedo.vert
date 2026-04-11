@@ -39,7 +39,12 @@ void main()
     gl_Position = projection * view * model * totalPosition;
     
     // Pass vertex color (used if no texture)
-    vCol = vec4(col, 1.0f);
+    // Fall back to position-based color when vertex colors are unset (zero)
+    if (length(col) > 0.001) {
+        vCol = vec4(col, 1.0f);
+    } else {
+        vCol = vec4(clamp(pos, 0.0f, 1.0f), 1.0f);
+    }
     
     // Pass texture coordinates
     TexCoord = tex;

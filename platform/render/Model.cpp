@@ -262,6 +262,31 @@ void Model::RenderModel() {
     }
 }
 
+void Model::RenderModelPerMeshTexture(GLint useTextureUniformLoc) {
+    if (m_meshList.empty()) {
+        return;
+    }
+    
+    for (size_t i = 0; i < m_meshList.size(); i++) {
+        if (!m_meshList[i]) {
+            continue;
+        }
+        
+        unsigned int materialIndex = m_meshToTex[i];
+        bool meshHasTexture = (materialIndex < m_textureList.size() && m_textureList[materialIndex] != nullptr);
+        
+        if (useTextureUniformLoc != -1) {
+            glUniform1i(useTextureUniformLoc, meshHasTexture ? 1 : 0);
+        }
+        
+        if (meshHasTexture) {
+            m_textureList[materialIndex]->UseTexture();
+        }
+        
+        m_meshList[i]->RenderMesh();
+    }
+}
+
 void Model::ClearModel() {
     // Clean up meshes
     for (size_t i = 0; i < m_meshList.size(); i++) {

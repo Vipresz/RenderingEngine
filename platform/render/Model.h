@@ -23,6 +23,7 @@ public:
     
     void LoadModel(const std::string& fileName);
     void RenderModel();
+    void RenderModelPerMeshTexture(GLint useTextureUniformLoc);
     void ClearModel();
     
     // Set base directory for resolving texture paths
