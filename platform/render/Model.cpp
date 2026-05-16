@@ -1,4 +1,5 @@
 #include "render/Model.h"
+#include "render/MeshAssetResolve.h"
 #include "Logger.h"
 #include <cstdio>
 #include <algorithm>
@@ -7,7 +8,87 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <filesystem>
 #include <glm/glm.hpp>
+#include <cctype>
+#include <cstdlib>
+
+namespace {
+
+namespace fs = std::filesystem;
+
+std::string ToLowerAscii(std::string s) {
+    for (char& c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+bool LooksLikeNonDiffuseMap(const std::string& lower) {
+    return lower.find("norm") != std::string::npos ||
+           lower.find("bump") != std::string::npos ||
+           lower.find("spec") != std::string::npos ||
+           lower.find("rough") != std::string::npos ||
+           lower.find("metal") != std::string::npos ||
+           lower.find("opacity") != std::string::npos ||
+           lower.find("mask") != std::string::npos ||
+           lower.find("cavity") != std::string::npos ||
+           lower.find("displ") != std::string::npos;
+}
+
+bool LooksLikeDiffuseFilename(const std::string& lower) {
+    if (LooksLikeNonDiffuseMap(lower)) {
+        return false;
+    }
+    return lower.find("dif") != std::string::npos || lower.find("diff") != std::string::npos ||
+           lower.find("albedo") != std::string::npos || lower.find("color") != std::string::npos ||
+           lower.find("basecolor") != std::string::npos || lower.find("_col") != std::string::npos;
+}
+
+bool IsProbablyRasterTextureFile(const fs::path& fp) {
+    std::string e = ToLowerAscii(fp.extension().string());
+    return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".bmp" || e == ".tga" ||
+           e == ".gif" || e == ".webp" || e == ".hdr" || e == ".tif" || e == ".tiff";
+}
+
+// Lower rank tries first when several diffuse-looking maps exist on disk (prefer 2k over 8k etc.).
+int DiffuseNameLodTier(const std::string& lower) {
+    if (lower.find("_8k") != std::string::npos) return 80;
+    if (lower.find("_4k") != std::string::npos) return 60;
+    if (lower.find("_2k") != std::string::npos) return 40;
+    if (lower.find("_1k") != std::string::npos) return 30;
+    if (lower.find("_512") != std::string::npos) return 20;
+    return 0;
+}
+
+void AppendDiffuseTexturePathsFromFolder(const fs::path& folder, std::vector<fs::path>& out,
+                                         std::map<fs::path, bool>& dedupSeen) {
+    std::error_code ec;
+    if (!fs::is_directory(folder, ec)) {
+        return;
+    }
+    for (const auto& ent : fs::directory_iterator(folder, fs::directory_options::skip_permission_denied, ec)) {
+        ec.clear();
+        if (!ent.is_regular_file(ec)) {
+            continue;
+        }
+        const fs::path& fp = ent.path();
+        if (!IsProbablyRasterTextureFile(fp)) {
+            continue;
+        }
+        const std::string lowerName = ToLowerAscii(fp.filename().string());
+        if (!LooksLikeDiffuseFilename(lowerName)) {
+            continue;
+        }
+        fs::path norm = fp.lexically_normal();
+        if (!dedupSeen[norm]) {
+            dedupSeen[norm] = true;
+            out.push_back(std::move(norm));
+        }
+    }
+}
+
+} // namespace
 
 namespace Engine {
 namespace Platform {
@@ -22,9 +103,15 @@ Model::Model() {
 }
 
 void Model::LoadModel(const std::string& fileName) {
+    const std::string resolved = ResolveMeshLoadPath(fileName);
+    const std::string pathToRead = resolved.empty() ? fileName : resolved;
+    if (!resolved.empty() && resolved != fileName) {
+        LOG_INFO_FMT("Model", "Resolved mesh path \"%s\" -> \"%s\"", fileName.c_str(), resolved.c_str());
+    }
+
     Assimp::Importer importer;
     const aiScene* scene = importer.ReadFile(
-        fileName,
+        pathToRead,
         aiProcess_Triangulate |
         aiProcess_FlipUVs |
         aiProcess_GenSmoothNormals |
@@ -32,15 +119,15 @@ void Model::LoadModel(const std::string& fileName) {
     );
     
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-        std::string errorMsg = std::string("Model (") + fileName + ") failed to load: " + importer.GetErrorString();
+        std::string errorMsg = std::string("Model (") + pathToRead + ") failed to load: " + importer.GetErrorString();
         LOG_ERROR_FMT("Model", "%s", errorMsg.c_str());
         throw std::runtime_error(errorMsg);
     }
     
     // Extract model directory for texture path resolution
-    size_t lastSlash = fileName.find_last_of("/\\");
+    size_t lastSlash = pathToRead.find_last_of("/\\");
     if (lastSlash != std::string::npos) {
-        m_modelDirectory = fileName.substr(0, lastSlash + 1);
+        m_modelDirectory = pathToRead.substr(0, lastSlash + 1);
     } else {
         m_modelDirectory = "";
     }
@@ -54,7 +141,7 @@ void Model::LoadModel(const std::string& fileName) {
     LoadMaterials(scene);
     
     if (m_meshList.empty()) {
-        throw std::runtime_error("Model loaded but contains no meshes: " + fileName);
+        throw std::runtime_error("Model loaded but contains no meshes: " + pathToRead);
     }
     
     CalculateBounds(scene);
@@ -185,61 +272,295 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
 
 void Model::LoadMaterials(const aiScene* scene) {
     m_textureList.resize(scene->mNumMaterials);
-    
+
     for (size_t i = 0; i < scene->mNumMaterials; i++) {
         aiMaterial* material = scene->mMaterials[i];
         m_textureList[i] = nullptr;
-        
-        // Try to load diffuse texture
-        if (material->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
-            aiString path;
-            if (material->GetTexture(aiTextureType_DIFFUSE, 0, &path) == AI_SUCCESS) {
-                std::string texturePath = ResolveTexturePath(std::string(path.data));
-                
-                m_textureList[i] = new Texture(texturePath.c_str());
-                
-                // Try loading with alpha, fall back to no alpha
-                if (!m_textureList[i]->LoadTextureA()) {
-                    if (!m_textureList[i]->LoadTexture()) {
-                        delete m_textureList[i];
-                        m_textureList[i] = nullptr;
+
+        auto tryLoadTexturePath = [&](const aiString& aiPath) -> bool {
+            const char* raw = aiPath.C_Str();
+            if (!raw || raw[0] == '\0') {
+                return false;
+            }
+            const std::string pstr(raw);
+
+            // Assimp embedded textures: "*0", "*1", ... index into scene->mTextures (compressed JPEG/PNG blob).
+            if (pstr[0] == '*') {
+                const int ti = std::atoi(pstr.c_str() + 1);
+                if (ti < 0 || static_cast<unsigned int>(ti) >= scene->mNumTextures || !scene->mTextures) {
+                    LOG_WARNING_FMT("Model", "Material %zu: invalid embedded texture ref '%s'", i, pstr.c_str());
+                    return false;
+                }
+                const aiTexture* et = scene->mTextures[ti];
+                if (!et || !et->pcData || et->mWidth == 0) {
+                    LOG_WARNING_FMT("Model", "Material %zu: empty embedded texture '%s'", i, pstr.c_str());
+                    return false;
+                }
+                if (et->mHeight == 0) {
+                    auto* t = new Texture("");
+                    const auto* bytes = reinterpret_cast<const unsigned char*>(et->pcData);
+                    if (t->LoadFromMemory(bytes, static_cast<int>(et->mWidth))) {
+                        m_textureList[i] = t;
+                        return true;
                     }
+                    delete t;
+                    LOG_WARNING_FMT("Model", "Material %zu: stb failed embedded '%s' (hint=%.3s)", i, pstr.c_str(),
+                                    et->achFormatHint);
+                    return false;
+                }
+                LOG_WARNING_FMT("Model", "Material %zu: skipping raw embedded texture '%s' (uncompressed not supported)",
+                                i, pstr.c_str());
+                return false;
+            }
+
+            std::string texturePath = ResolveTexturePath(pstr);
+            if (texturePath.empty() || texturePath[0] == '*' || texturePath[0] == '#') {
+                return false;
+            }
+
+            auto* t = new Texture(texturePath.c_str());
+            if (!t->LoadTextureA() && !t->LoadTexture()) {
+                LOG_WARNING_FMT("Model", "Material %zu: failed loading '%s' (resolved: %s)", i, pstr.c_str(),
+                                texturePath.c_str());
+                delete t;
+                return false;
+            }
+            m_textureList[i] = t;
+            return true;
+        };
+
+        static const aiTextureType kAlbedoTypes[] = {
+            aiTextureType_DIFFUSE,
+            aiTextureType_BASE_COLOR,
+        };
+
+        for (aiTextureType albedoSlot : kAlbedoTypes) {
+            if (material->GetTextureCount(albedoSlot) == 0) {
+                continue;
+            }
+            aiString path;
+            if (material->GetTexture(albedoSlot, 0, &path) != AI_SUCCESS) {
+                continue;
+            }
+            if (tryLoadTexturePath(path)) {
+                break;
+            }
+        }
+
+        // FBX occasionally lists file-based maps under UNKNOWN; pick plausible albedo filenames.
+        if (!m_textureList[i] && material->GetTextureCount(aiTextureType_UNKNOWN) > 0) {
+            const unsigned maxU = std::min(material->GetTextureCount(aiTextureType_UNKNOWN), 16u);
+            for (unsigned ui = 0; ui < maxU; ui++) {
+                aiString path;
+                if (material->GetTexture(aiTextureType_UNKNOWN, ui, &path) != AI_SUCCESS) {
+                    continue;
+                }
+                const std::string lower = ToLowerAscii(std::string(path.C_Str()));
+                if (!LooksLikeDiffuseFilename(lower)) {
+                    continue;
+                }
+                if (tryLoadTexturePath(path)) {
+                    break;
                 }
             }
         }
-        
-        // If no texture was loaded, create a default white texture
+
+        // Maps sometimes referenced only under ambient/emissive slots; still diffuse-like filenames.
         if (!m_textureList[i]) {
-            // Try to load a default texture, or we'll handle this in rendering
-            // For now, set to nullptr - we can handle default textures in the renderer
-            m_textureList[i] = nullptr;
+            static const aiTextureType kExtraProbeTypes[] = {aiTextureType_AMBIENT, aiTextureType_EMISSIVE};
+            for (aiTextureType ty : kExtraProbeTypes) {
+                if (material->GetTextureCount(ty) == 0) {
+                    continue;
+                }
+                aiString path;
+                if (material->GetTexture(ty, 0, &path) != AI_SUCCESS) {
+                    continue;
+                }
+                const std::string lower = ToLowerAscii(std::string(path.C_Str()));
+                if (!LooksLikeDiffuseFilename(lower)) {
+                    continue;
+                }
+                if (tryLoadTexturePath(path)) {
+                    break;
+                }
+            }
+        }
+
+        // Material lost file paths but FBX still carries compressed embedded textures (use *ti indices).
+        if (!m_textureList[i] && scene->mNumTextures > 0 && scene->mTextures) {
+            for (unsigned ti = 0; ti < scene->mNumTextures && !m_textureList[i]; ++ti) {
+                const aiTexture* et = scene->mTextures[ti];
+                if (!et || !et->pcData || et->mWidth == 0 || et->mHeight != 0) {
+                    continue;
+                }
+                const std::string fn = ToLowerAscii(std::string(et->mFilename.C_Str()));
+                const bool unnamed = fn.empty();
+                if (scene->mNumTextures > 1) {
+                    if (unnamed || !LooksLikeDiffuseFilename(fn)) {
+                        continue;
+                    }
+                }
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "*%u", ti);
+                aiString path;
+                path.Set(buf);
+                if (tryLoadTexturePath(path)) {
+                    LOG_INFO_FMT("Model",
+                                 "Material %zu: diffuse from embedded scene texture slot %u (hint=%.3s name='%s')", i,
+                                 ti, et->achFormatHint, et->mFilename.C_Str() ? et->mFilename.C_Str() : "");
+                    break;
+                }
+            }
+        }
+
+        // Unlinked materials: common layout is mesh FBX beside tex/*_dif_*.{jpg,png,...}
+        if (!m_textureList[i] && !m_modelDirectory.empty()) {
+            std::vector<std::filesystem::path> candidateFiles;
+            std::map<std::filesystem::path, bool> seenPaths;
+            const std::filesystem::path root(m_modelDirectory);
+            AppendDiffuseTexturePathsFromFolder(root / "tex", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root / "Tex", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root / "textures", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root / "Textures", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root / "maps", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root / "Maps", candidateFiles, seenPaths);
+            AppendDiffuseTexturePathsFromFolder(root, candidateFiles, seenPaths);
+
+            std::sort(candidateFiles.begin(), candidateFiles.end(),
+                      [](const std::filesystem::path& a, const std::filesystem::path& b) {
+                const std::string la = ToLowerAscii(a.filename().string());
+                const std::string lb = ToLowerAscii(b.filename().string());
+                const int ra = DiffuseNameLodTier(la);
+                const int rb = DiffuseNameLodTier(lb);
+                if (ra != rb) {
+                    return ra < rb;
+                }
+                return la < lb;
+            });
+
+            for (const std::filesystem::path& cand : candidateFiles) {
+                aiString aiFile;
+                std::filesystem::path candPref(cand);
+                aiFile.Set(candPref.make_preferred().string().c_str());
+                if (tryLoadTexturePath(aiFile)) {
+                    LOG_INFO_FMT("Model", "Material %zu: diffuse from filesystem fallback '%s'", i,
+                                 cand.string().c_str());
+                    break;
+                }
+            }
+        }
+
+        if (!m_textureList[i]) {
+            aiString matName;
+            if (material->Get(AI_MATKEY_NAME, matName) == AI_SUCCESS && matName.C_Str() && matName.C_Str()[0] != '\0') {
+                LOG_INFO_FMT("Model", "Material %zu '%s': no diffuse/base-color texture resolved", i, matName.C_Str());
+            }
         }
     }
 }
 
 std::string Model::ResolveTexturePath(const std::string& texturePath) {
-    // First, try to extract just the filename
-    size_t lastSlash = texturePath.find_last_of("/\\");
-    std::string filename = (lastSlash != std::string::npos) ? 
-                           texturePath.substr(lastSlash + 1) : texturePath;
-    
-    // If textureBaseDir is set, use it
+    if (texturePath.empty()) {
+        return texturePath;
+    }
+    // Embedded or procedural textures (not files on disk)
+    if (texturePath[0] == '*' || texturePath[0] == '#') {
+        return texturePath;
+    }
+
+    namespace fs = std::filesystem;
+
+    auto fileExists = [](const fs::path& p) -> bool {
+        std::error_code ec;
+        return fs::is_regular_file(p, ec);
+    };
+
+    fs::path rel(texturePath);
+    const fs::path filenameOnly = rel.filename();
+
+    auto pushCandidates = [&](const fs::path& baseRaw, std::vector<fs::path>& out) {
+        if (baseRaw.empty()) {
+            return;
+        }
+        fs::path base = baseRaw;
+        std::string bs = base.string();
+        while (!bs.empty() && (bs.back() == '/' || bs.back() == '\\')) {
+            bs.pop_back();
+        }
+        base = fs::path(bs);
+
+        auto pushUnique = [&](const fs::path& cand) {
+            fs::path n = cand.lexically_normal();
+            if (std::find(out.begin(), out.end(), n) == out.end()) {
+                out.push_back(std::move(n));
+            }
+        };
+
+        pushUnique(base / rel);
+        pushUnique(base / filenameOnly);
+
+        pushUnique(base / "tex" / filenameOnly);
+        pushUnique(base / "Tex" / filenameOnly);
+        pushUnique(base / "textures" / filenameOnly);
+        pushUnique(base / "Textures" / filenameOnly);
+        pushUnique(base / "maps" / filenameOnly);
+        pushUnique(base / "Maps" / filenameOnly);
+    };
+
+    std::vector<fs::path> candidates;
+    candidates.reserve(24);
+
+    if (!m_textureBaseDir.empty()) {
+        pushCandidates(fs::path(m_textureBaseDir), candidates);
+    }
+    if (!m_modelDirectory.empty()) {
+        pushCandidates(fs::path(m_modelDirectory), candidates);
+    }
+
+    for (const fs::path& cand : candidates) {
+        if (fileExists(cand)) {
+            fs::path out = cand;
+            return out.make_preferred().string();
+        }
+    }
+
+    auto lowerExt = [](std::string e) -> std::string {
+        std::transform(e.begin(), e.end(), e.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return e;
+    };
+
+    for (const fs::path& cand : candidates) {
+        std::string ext = lowerExt(cand.extension().string());
+        if (ext != ".tif" && ext != ".tiff") {
+            continue;
+        }
+        const fs::path parent = cand.parent_path();
+        const fs::path stem = cand.stem();
+        static const char* const kFallbackExt[] = {".jpg", ".jpeg", ".png"};
+        for (const char* alt : kFallbackExt) {
+            const fs::path altPath = parent / (stem.string() + alt);
+            if (fileExists(altPath)) {
+                fs::path altOut = altPath;
+                return altOut.make_preferred().string();
+            }
+        }
+    }
+
+    // Legacy resolution: flattened filename beside model/base (prior behavior clients may rely on)
     if (!m_textureBaseDir.empty()) {
         std::string basePath = m_textureBaseDir;
-        // Ensure baseDir ends with a separator
         if (basePath.back() != '/' && basePath.back() != '\\') {
             basePath += "/";
         }
-        return basePath + filename;
+        return basePath + filenameOnly.string();
     }
-    
-    // Otherwise, try relative to model directory
+
     if (!m_modelDirectory.empty()) {
-        return m_modelDirectory + filename;
+        return m_modelDirectory + filenameOnly.string();
     }
-    
-    // Last resort: try just the filename
-    return filename;
+
+    return filenameOnly.empty() ? texturePath : filenameOnly.string();
 }
 
 void Model::RenderModel() {

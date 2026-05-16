@@ -58,11 +58,11 @@ void main()
 	gl_Position = projection * view * model * finalPosition;
 	DirectionalLightSpacePos = directionalLightTransform * model * finalPosition;
 	
-	// Use vertex color if available, otherwise use position-based color
+	// When no per-vertex colors are bound, leave vCol as zero so the fragment shader can use texture or neutral gray.
 	if (length(vertexColor) > 0.001) {
 		vCol = vec4(vertexColor, 1.0f);
 	} else {
-		vCol = vec4(clamp(pos, 0.0f, 1.0f), 1.0f);
+		vCol = vec4(0.0f, 0.0f, 0.0f, 1.0f);
 	}
 	
 	TexCoord = tex;

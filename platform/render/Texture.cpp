@@ -25,53 +25,96 @@ Texture::Texture(const char* fileLoc) {
 }
 
 bool Texture::LoadTexture() {
-    unsigned char* texData = stbi_load(fileLocation, &width, &height, &bitDepth, 0);
+    int channelsInFile = 0;
+    unsigned char* texData =
+        stbi_load(fileLocation, &width, &height, &channelsInFile, STBI_rgb);
     if (!texData) {
-        printf("Failed to find: %s\n", fileLocation);
+        printf("Failed to find or decode RGB texture: %s\n", fileLocation ? fileLocation : "");
         return false;
     }
-    
+    bitDepth = 3;
+
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
-    
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    
-    GLenum format = (bitDepth == 4) ? GL_RGBA : GL_RGB;
-    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, texData);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, texData);
     glGenerateMipmap(GL_TEXTURE_2D);
-    
+
     glBindTexture(GL_TEXTURE_2D, 0);
-    
+
     stbi_image_free(texData);
-    
+
     return true;
 }
 
 bool Texture::LoadTextureA() {
-    unsigned char* texData = stbi_load(fileLocation, &width, &height, &bitDepth, 0);
+    int channelsInFile = 0;
+    unsigned char* texData =
+        stbi_load(fileLocation, &width, &height, &channelsInFile, STBI_rgb_alpha);
     if (!texData) {
-        printf("Failed to find: %s\n", fileLocation);
+        printf("Failed to find or decode RGBA texture: %s\n", fileLocation ? fileLocation : "");
         return false;
     }
-    
+    bitDepth = 4;
+
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
-    
+
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    
+
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
     glGenerateMipmap(GL_TEXTURE_2D);
-    
+
     glBindTexture(GL_TEXTURE_2D, 0);
-    
+
     stbi_image_free(texData);
-    
+
+    return true;
+}
+
+bool Texture::LoadFromMemory(const unsigned char* buffer, int len) {
+    if (!buffer || len <= 0) {
+        return false;
+    }
+
+    int channelsInFile = 0;
+    unsigned char* texData =
+        stbi_load_from_memory(buffer, len, &width, &height, &channelsInFile, STBI_rgb_alpha);
+    if (!texData) {
+        channelsInFile = 0;
+        texData = stbi_load_from_memory(buffer, len, &width, &height, &channelsInFile, STBI_rgb);
+    }
+    if (!texData) {
+        return false;
+    }
+    bitDepth = (channelsInFile == 4) ? 4 : 3;
+
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    if (bitDepth == 4) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texData);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, texData);
+    }
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    stbi_image_free(texData);
     return true;
 }
 

@@ -145,6 +145,12 @@ void Shader::CompileProgram() {
     uniformShininess = glGetUniformLocation(shaderID, "material.shininess");
     uniformTexture = glGetUniformLocation(shaderID, "theTexture");
     uniformDirectionalLightTransform = glGetUniformLocation(shaderID, "directionalLightTransform");
+    {
+        const GLint uniformUseTexture = glGetUniformLocation(shaderID, "useTexture");
+        if (uniformUseTexture == -1) {
+            printf("Warning: Uniform 'useTexture' not found in shader — mesh textures may not render.\n");
+        }
+    }
     
     // Warn about missing critical uniforms (but continue - they might be optional)
     if (uniformProjection == -1) {

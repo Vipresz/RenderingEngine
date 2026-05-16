@@ -14,6 +14,7 @@ set(PLATFORM_SOURCES
     render/Camera.cpp
     render/FollowCamera.cpp
     render/Model.cpp
+    render/MeshAssetResolve.cpp
     render/Animation.cpp
     render/Skeleton.cpp
     render/systems/RenderSystem.cpp
@@ -115,8 +116,10 @@ if(USE_HOMEBREW)
         endif()
     endif()
 else()
-    # Windows: Use game_libs directory
-set(GLEW_ROOT "${GAME_LIBS_DIR}/glew-2.1.0")
+    # Windows: game_libs path, or parent may set GLEW_ROOT (e.g. camera_system after GLEW zip bootstrap)
+    if(NOT GLEW_ROOT)
+        set(GLEW_ROOT "${GAME_LIBS_DIR}/glew-2.1.0")
+    endif()
 set(GLEW_INCLUDE_DIR "${GLEW_ROOT}/include")
 set(GLEW_LIB_DIR "${GLEW_ROOT}/lib/Release/x64")
 set(GLEW_DLL_DIR "${GLEW_ROOT}/bin/Release/x64")

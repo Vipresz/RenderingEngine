@@ -13,6 +13,8 @@ public:
     
     bool LoadTexture();
     bool LoadTextureA();
+    /// Decode image bytes (e.g. Assimp embedded JPEG/PNG). Returns false if stb cannot decode.
+    bool LoadFromMemory(const unsigned char* buffer, int len);
     
     void UseTexture();
     void ClearTexture();
