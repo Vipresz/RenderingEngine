@@ -22,12 +22,14 @@ TEST(NetworkPayloadsTest, LoginResponseRoundTrip) {
     original.success = true;
     original.assignedUserId = 7;
     original.message = "ok";
+    original.udpSessionToken = 0x12345678ABCDEF00ull;
 
     LoginResponsePayload decoded;
     ASSERT_TRUE(LoginResponsePayload::Deserialize(original.Serialize(), decoded));
     EXPECT_TRUE(decoded.success);
     EXPECT_EQ(decoded.assignedUserId, 7u);
     EXPECT_EQ(decoded.message, "ok");
+    EXPECT_EQ(decoded.udpSessionToken, 0x12345678ABCDEF00ull);
 }
 
 TEST(NetworkPayloadsTest, TransformStateRoundTrip) {

@@ -30,6 +30,7 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/DatagramSocket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/UdpChannel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/Socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/systems/ReplicationSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/physics/SimplePhysicsWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/audio/NullAudioBackend.cpp
 )
@@ -58,7 +59,9 @@ set(ENGINE_TEST_SOURCES
     scene/PrefabTest.cpp
     network/InterestManagerTest.cpp
     network/ServerAuthorityTest.cpp
+    network/SocketTest.cpp
     network/UdpChannelTest.cpp
+    network/ReplicationSystemTest.cpp
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
 )

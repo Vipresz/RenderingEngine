@@ -56,11 +56,12 @@ bool NetClient::ConnectUdp(const std::string& host, uint16_t udpPort) {
         return false;
     }
 
-    m_udpChannel.SetUnreliableTransformHandler([this](const Engine::Net::TransformStatePayload& transform) {
-        if (m_callbacks.onTransformState) {
-            m_callbacks.onTransformState(transform);
-        }
-    });
+    m_udpChannel.SetUnreliableTransformHandler(
+        [this](const Engine::Net::TransformStatePayload& transform, const UdpDatagramContext&) {
+            if (m_callbacks.onTransformState) {
+                m_callbacks.onTransformState(transform);
+            }
+        });
     return true;
 }
 
@@ -93,11 +94,28 @@ bool NetClient::Login(const std::string& displayName, Engine::Net::UserId prefer
     return false;
 }
 
+bool NetClient::RegisterUdpSession() {
+    if (!m_loggedIn || m_udpSessionToken == 0) {
+        return false;
+    }
+    if (!m_udpChannel.IsOpen()) {
+        if (!ConnectUdp(m_host, m_udpPort)) {
+            return false;
+        }
+    }
+
+    Engine::Net::UdpSessionRegisterPayload registration;
+    registration.userId = m_userId;
+    registration.sessionToken = m_udpSessionToken;
+    return m_udpChannel.SendUdpSessionRegister(registration);
+}
+
 void NetClient::Disconnect() {
     m_running = false;
     m_connected = false;
     m_loggedIn = false;
     m_userId = Engine::Net::kInvalidUserId;
+    m_udpSessionToken = 0;
 
     if (m_connection) {
         m_connection->Close();
@@ -197,6 +215,7 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (response.success) {
                 m_loggedIn = true;
                 m_userId = response.assignedUserId;
+                m_udpSessionToken = response.udpSessionToken;
             } else {
                 LOG_ERROR_FMT("NetClient", "Login failed: %s", response.message.c_str());
             }

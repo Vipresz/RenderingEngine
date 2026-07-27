@@ -52,6 +52,10 @@ bool UdpChannel::SendUnreliableTransform(const Engine::Net::TransformStatePayloa
     return SendPayload(Engine::Net::MessageType::UnreliableTransform, payload.Serialize());
 }
 
+bool UdpChannel::SendUdpSessionRegister(const Engine::Net::UdpSessionRegisterPayload& payload) {
+    return SendPayload(Engine::Net::MessageType::UdpSessionRegister, payload.Serialize());
+}
+
 bool UdpChannel::SendPayload(Engine::Net::MessageType type, const Engine::Net::NetBuffer& payload) {
     if (!m_socket.IsValid()) {
         return false;
@@ -90,11 +94,14 @@ void UdpChannel::Poll() {
         if (result != SocketResult::Ok || received == 0) {
             break;
         }
-        HandleDatagram(buffer, received);
+        HandleDatagram(buffer, received, host, port);
     }
 }
 
-void UdpChannel::HandleDatagram(const uint8_t* data, size_t size) {
+void UdpChannel::HandleDatagram(const uint8_t* data,
+                                size_t size,
+                                const std::string& host,
+                                uint16_t port) {
     if (!data || size < sizeof(UdpPacketHeader)) {
         return;
     }
@@ -110,11 +117,20 @@ void UdpChannel::HandleDatagram(const uint8_t* data, size_t size) {
     const size_t payloadSize = size - payloadOffset;
     Engine::Net::NetBuffer payload(std::vector<uint8_t>(data + payloadOffset, data + payloadOffset + payloadSize));
 
+    const UdpDatagramContext context{host, port};
+
     switch (static_cast<Engine::Net::MessageType>(header.type)) {
         case Engine::Net::MessageType::UnreliableTransform: {
             Engine::Net::TransformStatePayload transform;
             if (Engine::Net::TransformStatePayload::Deserialize(payload, transform) && m_transformHandler) {
-                m_transformHandler(transform);
+                m_transformHandler(transform, context);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::UdpSessionRegister: {
+            Engine::Net::UdpSessionRegisterPayload registration;
+            if (Engine::Net::UdpSessionRegisterPayload::Deserialize(payload, registration) && m_registerHandler) {
+                m_registerHandler(registration, context);
             }
             break;
         }

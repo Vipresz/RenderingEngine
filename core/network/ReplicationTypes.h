@@ -18,6 +18,7 @@ using ReplicationComponentId = uint16_t;
 
 constexpr NetEntityId kInvalidNetEntity = 0;
 constexpr ReplicationComponentId kInvalidReplicationComponent = 0;
+constexpr ReplicationComponentId kTransformReplicationComponent = 1;
 
 // Per-component replicated state blob.
 struct ComponentSnapshot {

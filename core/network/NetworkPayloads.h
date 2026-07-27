@@ -32,12 +32,14 @@ struct LoginResponsePayload {
     bool success = false;
     UserId assignedUserId = kInvalidUserId;
     std::string message;
+    uint64_t udpSessionToken = 0;
 
     NetBuffer Serialize() const {
         NetBuffer buffer;
         buffer.WriteU8(success ? 1 : 0);
         buffer.WriteU32(assignedUserId);
         buffer.WriteString(message);
+        buffer.WriteU64(udpSessionToken);
         return buffer;
     }
 
@@ -49,6 +51,9 @@ struct LoginResponsePayload {
             return false;
         }
         out.success = successByte != 0;
+        if (!copy.ReadU64(out.udpSessionToken)) {
+            out.udpSessionToken = 0;
+        }
         return true;
     }
 };
@@ -127,6 +132,24 @@ struct PeerEventPayload {
         NetBuffer copy = buffer;
         copy.ResetRead();
         return copy.ReadU32(out.userId) && copy.ReadString(out.displayName);
+    }
+};
+
+struct UdpSessionRegisterPayload {
+    UserId userId = kInvalidUserId;
+    uint64_t sessionToken = 0;
+
+    NetBuffer Serialize() const {
+        NetBuffer buffer;
+        buffer.WriteU32(userId);
+        buffer.WriteU64(sessionToken);
+        return buffer;
+    }
+
+    static bool Deserialize(const NetBuffer& buffer, UdpSessionRegisterPayload& out) {
+        NetBuffer copy = buffer;
+        copy.ResetRead();
+        return copy.ReadU32(out.userId) && copy.ReadU64(out.sessionToken);
     }
 };
 

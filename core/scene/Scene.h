@@ -10,8 +10,11 @@ namespace Scene {
 
 class Scene {
 public:
+    friend class SceneSerializer;
+
     SceneNodeId CreateNode(const std::string& name, SceneNodeId parentId = kInvalidSceneNode);
     void DestroyNode(SceneNodeId nodeId);
+    void Clear();
 
     SceneNode* GetNode(SceneNodeId nodeId);
     const SceneNode* GetNode(SceneNodeId nodeId) const;

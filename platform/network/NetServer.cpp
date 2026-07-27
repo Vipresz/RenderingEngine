@@ -3,6 +3,7 @@
 #include "Logger.h"
 
 #include <chrono>
+#include <random>
 #include <thread>
 
 #ifdef _WIN32
@@ -13,6 +14,17 @@
 #endif
 
 using EngineLogging::Logger;
+
+namespace {
+
+uint64_t GenerateSessionToken() {
+    std::random_device rd;
+    const uint64_t a = (static_cast<uint64_t>(rd()) << 32) | static_cast<uint64_t>(rd());
+    const uint64_t b = (static_cast<uint64_t>(rd()) << 32) | static_cast<uint64_t>(rd());
+    return a ^ b;
+}
+
+} // namespace
 
 namespace Engine {
 namespace Platform {
@@ -44,9 +56,20 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
     if (!m_udpChannel.Bind(host, udpPort)) {
         LOG_WARNING_FMT("NetServer", "UDP bind failed on %s:%u — unreliable movement disabled", host.c_str(), udpPort);
     } else {
-        m_udpChannel.SetUnreliableTransformHandler([this](const Engine::Net::TransformStatePayload& transform) {
-            HandleUnreliableTransform(transform.userId, transform);
-        });
+        m_udpChannel.SetUnreliableTransformHandler(
+            [this](const Engine::Net::TransformStatePayload& transform, const UdpDatagramContext& context) {
+                const Engine::Net::UserId userId = ResolveUdpUser(context);
+                if (userId == Engine::Net::kInvalidUserId) {
+                    return;
+                }
+                Engine::Net::TransformStatePayload authorized = transform;
+                authorized.userId = userId;
+                HandleUnreliableTransform(userId, authorized);
+            });
+        m_udpChannel.SetUdpSessionRegisterHandler(
+            [this](const Engine::Net::UdpSessionRegisterPayload& registration, const UdpDatagramContext& context) {
+                HandleUdpSessionRegister(registration, context);
+            });
     }
 
     m_running = true;
@@ -60,6 +83,8 @@ void NetServer::Stop() {
     m_listenSocket.Close();
     m_udpChannel.Close();
     m_lastTransforms.clear();
+    m_endpointToUser.clear();
+    m_userToEndpoint.clear();
     m_interestManager = InterestManager();
 
     if (m_acceptThread.joinable()) {
@@ -194,6 +219,7 @@ void NetServer::RemoveClient(Engine::Net::UserId userId) {
     }
 
     if (wasLoggedIn) {
+        ClearUdpEndpoint(userId);
         Broadcast(Engine::Net::MakeMessage(
                       Engine::Net::MessageType::PeerLeft, event.Serialize(), m_sequence++),
                   userId);
@@ -220,12 +246,20 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                     return;
                 }
                 it->second->displayName = displayName;
+                it->second->udpSessionToken = GenerateSessionToken();
             }
 
             Engine::Net::LoginResponsePayload response;
             response.success = true;
             response.assignedUserId = userId;
             response.message = "ok";
+            {
+                std::lock_guard<std::mutex> lock(m_clientsMutex);
+                auto it = m_clients.find(userId);
+                if (it != m_clients.end()) {
+                    response.udpSessionToken = it->second->udpSessionToken;
+                }
+            }
             SendToClient(userId, Engine::Net::MakeMessage(
                                      Engine::Net::MessageType::LoginResponse,
                                      response.Serialize(),
@@ -238,6 +272,7 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                           Engine::Net::MessageType::PeerJoined, joined.Serialize(), m_sequence++),
                       userId);
             SendExistingPeersTo(userId);
+            SendExistingPeerTransformsTo(userId);
             LOG_INFO_FMT("NetServer", "Client logged in as %u (%s)", userId, displayName.c_str());
             break;
         }
@@ -356,6 +391,71 @@ void NetServer::SendExistingPeersTo(Engine::Net::UserId newUserId) {
     for (const auto& peer : peers) {
         SendToClient(newUserId, Engine::Net::MakeMessage(
                                     Engine::Net::MessageType::PeerJoined, peer.Serialize(), m_sequence++));
+    }
+}
+
+void NetServer::SendExistingPeerTransformsTo(Engine::Net::UserId newUserId) {
+    std::vector<Engine::Net::TransformStatePayload> transforms;
+    {
+        std::lock_guard<std::mutex> lock(m_clientsMutex);
+        transforms.reserve(m_lastTransforms.size());
+        for (const auto& entry : m_lastTransforms) {
+            if (entry.first == newUserId) {
+                continue;
+            }
+            transforms.push_back(entry.second);
+        }
+    }
+
+    for (const auto& transform : transforms) {
+        SendToClient(newUserId, Engine::Net::MakeMessage(
+                                 Engine::Net::MessageType::TransformState,
+                                 transform.Serialize(),
+                                 m_sequence++));
+    }
+}
+
+std::string NetServer::MakeEndpointKey(const std::string& host, uint16_t port) {
+    return host + ":" + std::to_string(port);
+}
+
+void NetServer::HandleUdpSessionRegister(const Engine::Net::UdpSessionRegisterPayload& registration,
+                                         const UdpDatagramContext& context) {
+    if (registration.userId == Engine::Net::kInvalidUserId || registration.sessionToken == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_clientsMutex);
+    const auto clientIt = m_clients.find(registration.userId);
+    if (clientIt == m_clients.end() || !clientIt->second) {
+        return;
+    }
+    if (clientIt->second->udpSessionToken != registration.sessionToken) {
+        LOG_WARNING_FMT("NetServer", "Rejected UDP register for user %u (bad token)", registration.userId);
+        return;
+    }
+
+    ClearUdpEndpoint(registration.userId);
+    const std::string endpointKey = MakeEndpointKey(context.host, context.port);
+    m_endpointToUser[endpointKey] = registration.userId;
+    m_userToEndpoint[registration.userId] = endpointKey;
+    LOG_INFO_FMT("NetServer", "UDP session bound for user %u at %s", registration.userId, endpointKey.c_str());
+}
+
+Engine::Net::UserId NetServer::ResolveUdpUser(const UdpDatagramContext& context) const {
+    const std::string endpointKey = MakeEndpointKey(context.host, context.port);
+    const auto it = m_endpointToUser.find(endpointKey);
+    if (it == m_endpointToUser.end()) {
+        return Engine::Net::kInvalidUserId;
+    }
+    return it->second;
+}
+
+void NetServer::ClearUdpEndpoint(Engine::Net::UserId userId) {
+    const auto endpointIt = m_userToEndpoint.find(userId);
+    if (endpointIt != m_userToEndpoint.end()) {
+        m_endpointToUser.erase(endpointIt->second);
+        m_userToEndpoint.erase(endpointIt);
     }
 }
 

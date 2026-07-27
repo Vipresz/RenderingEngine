@@ -14,7 +14,15 @@ namespace Engine {
 namespace Platform {
 namespace Networking {
 
-using UnreliableTransformHandler = std::function<void(const Engine::Net::TransformStatePayload&)>;
+struct UdpDatagramContext {
+    std::string host;
+    uint16_t port = 0;
+};
+
+using UnreliableTransformHandler =
+    std::function<void(const Engine::Net::TransformStatePayload&, const UdpDatagramContext&)>;
+using UdpSessionRegisterHandler =
+    std::function<void(const Engine::Net::UdpSessionRegisterPayload&, const UdpDatagramContext&)>;
 
 // Lightweight unreliable channel for high-frequency movement updates over UDP.
 class UdpChannel {
@@ -28,8 +36,12 @@ public:
     void SetUnreliableTransformHandler(UnreliableTransformHandler handler) {
         m_transformHandler = std::move(handler);
     }
+    void SetUdpSessionRegisterHandler(UdpSessionRegisterHandler handler) {
+        m_registerHandler = std::move(handler);
+    }
 
     bool SendUnreliableTransform(const Engine::Net::TransformStatePayload& payload);
+    bool SendUdpSessionRegister(const Engine::Net::UdpSessionRegisterPayload& payload);
     void Poll();
 
 private:
@@ -41,10 +53,11 @@ private:
     };
 
     bool SendPayload(Engine::Net::MessageType type, const Engine::Net::NetBuffer& payload);
-    void HandleDatagram(const uint8_t* data, size_t size);
+    void HandleDatagram(const uint8_t* data, size_t size, const std::string& host, uint16_t port);
 
     DatagramSocket m_socket;
     UnreliableTransformHandler m_transformHandler;
+    UdpSessionRegisterHandler m_registerHandler;
     uint64_t m_sendSequence = 1;
     std::string m_remoteHost;
     uint16_t m_remotePort = 0;

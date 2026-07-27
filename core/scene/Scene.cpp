@@ -55,6 +55,12 @@ void Scene::DestroyNode(SceneNodeId nodeId) {
     }
 }
 
+void Scene::Clear() {
+    m_nodes.clear();
+    m_rootId = kInvalidSceneNode;
+    m_nextId = 1;
+}
+
 SceneNode* Scene::GetNode(SceneNodeId nodeId) {
     auto it = m_nodes.find(nodeId);
     return it == m_nodes.end() ? nullptr : &it->second;

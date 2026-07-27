@@ -38,6 +38,7 @@ public:
     bool Connect(const std::string& host, uint16_t port);
     bool ConnectUdp(const std::string& host, uint16_t udpPort = ::Engine::Net::kDefaultUdpPort);
     bool Login(const std::string& displayName, NetUserId preferredUserId = ::Engine::Net::kInvalidUserId);
+    bool RegisterUdpSession();
     void Disconnect();
 
     bool IsConnected() const { return m_connected; }
@@ -76,6 +77,7 @@ private:
     bool m_useUdpForMovement = true;
     std::string m_host;
     uint16_t m_udpPort = ::Engine::Net::kDefaultUdpPort;
+    uint64_t m_udpSessionToken = 0;
 };
 
 } // namespace Networking

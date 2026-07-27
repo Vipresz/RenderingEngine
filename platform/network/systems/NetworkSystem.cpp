@@ -70,8 +70,11 @@ bool NetworkSystem::ConnectAndLogin(const std::string& host,
     if (!m_client.Connect(host, port)) {
         return false;
     }
+    if (!m_client.Login(displayName, preferredUserId)) {
+        return false;
+    }
     m_client.ConnectUdp(host, udpPort);
-    return m_client.Login(displayName, preferredUserId);
+    return m_client.RegisterUdpSession();
 }
 
 void NetworkSystem::Disconnect() {

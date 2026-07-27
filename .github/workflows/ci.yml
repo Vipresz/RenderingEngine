@@ -39,3 +39,27 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --parallel
+
+  coverage-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install OpenCppCoverage
+        run: choco install opencppcoverage -y
+
+      - name: Configure
+        run: cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-cov --config Debug --target EngineTests
+
+      - name: Coverage gate (60%)
+        shell: pwsh
+        run: |
+          $occ = "${env:ProgramFiles}\OpenCppCoverage\OpenCppCoverage.exe"
+          if (-not (Test-Path $occ)) {
+            $occ = "${env:ProgramFiles(x86)}\OpenCppCoverage\OpenCppCoverage.exe"
+          }
+          ./scripts/check_coverage.ps1 -BuildDir build-cov -Config Debug -MinCoverage 0.60 -OpenCppCoverage $occ

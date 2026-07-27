@@ -15,6 +15,7 @@ set(PLATFORM_SOURCES
     render/FollowCamera.cpp
     render/Model.cpp
     render/MeshAssetResolve.cpp
+    render/AssetManager.cpp
     render/Animation.cpp
     render/Skeleton.cpp
     render/RenderPipeline.cpp

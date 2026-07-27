@@ -7,7 +7,9 @@
 #include <thread>
 
 using Engine::Net::TransformStatePayload;
+using Engine::Net::UdpSessionRegisterPayload;
 using Engine::Platform::Networking::UdpChannel;
+using Engine::Platform::Networking::UdpDatagramContext;
 
 TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     UdpChannel server;
@@ -19,7 +21,7 @@ TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     std::atomic<bool> received{false};
     TransformStatePayload receivedPayload;
 
-    server.SetUnreliableTransformHandler([&](const TransformStatePayload& payload) {
+    server.SetUnreliableTransformHandler([&](const TransformStatePayload& payload, const UdpDatagramContext&) {
         receivedPayload = payload;
         received = true;
     });
@@ -40,4 +42,37 @@ TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     EXPECT_EQ(receivedPayload.userId, 7u);
     EXPECT_EQ(receivedPayload.tick, 99u);
     EXPECT_FLOAT_EQ(receivedPayload.position.z, 3.0f);
+}
+
+TEST(UdpChannelTest, LoopbackSessionRegister) {
+    UdpChannel server;
+    UdpChannel client;
+
+    ASSERT_TRUE(server.Bind("127.0.0.1", 19001));
+    ASSERT_TRUE(client.Connect("127.0.0.1", 19001));
+
+    std::atomic<bool> received{false};
+    UdpSessionRegisterPayload receivedPayload;
+
+    server.SetUdpSessionRegisterHandler([&](const UdpSessionRegisterPayload& payload, const UdpDatagramContext& ctx) {
+        receivedPayload = payload;
+        EXPECT_FALSE(ctx.host.empty());
+        EXPECT_GT(ctx.port, 0u);
+        received = true;
+    });
+
+    UdpSessionRegisterPayload sent;
+    sent.userId = 3;
+    sent.sessionToken = 0xABCDEF01ull;
+    ASSERT_TRUE(client.SendUdpSessionRegister(sent));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!received && std::chrono::steady_clock::now() < deadline) {
+        server.Poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_TRUE(received.load());
+    EXPECT_EQ(receivedPayload.userId, 3u);
+    EXPECT_EQ(receivedPayload.sessionToken, 0xABCDEF01ull);
 }
