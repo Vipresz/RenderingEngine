@@ -16,6 +16,13 @@ if ([System.IO.Path]::IsPathRooted($BuildDir)) {
 }
 
 $testExe = Join-Path $buildRoot "bin\$Config\EngineTests.exe"
+if (-not (Test-Path $testExe)) {
+    $found = Get-ChildItem -Path $buildRoot -Recurse -Filter "EngineTests.exe" -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($found) {
+        $testExe = $found.FullName
+    }
+}
 $coverageXml = Join-Path $buildRoot "coverage.xml"
 
 if (-not (Test-Path $testExe)) {
