@@ -25,6 +25,7 @@ public:
     SoundHandle LoadSound(const std::string& path);
     void Play2D(const std::string& path, float volume = 1.0f, bool loop = false);
     void Play3D(const std::string& path, const glm::vec3& position, float volume = 1.0f, bool loop = false);
+    void Stop(const std::string& path);
 
     void Initialize(ECS::Registry& registry) override;
     void Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) override;

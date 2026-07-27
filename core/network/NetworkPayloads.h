@@ -13,18 +13,36 @@ namespace Net {
 struct LoginRequestPayload {
     UserId preferredUserId = kInvalidUserId;
     std::string displayName;
+    std::string username;
+    std::string password;
+    std::string authToken;
 
     NetBuffer Serialize() const {
         NetBuffer buffer;
         buffer.WriteU32(preferredUserId);
         buffer.WriteString(displayName);
+        buffer.WriteString(username);
+        buffer.WriteString(password);
+        buffer.WriteString(authToken);
         return buffer;
     }
 
     static bool Deserialize(const NetBuffer& buffer, LoginRequestPayload& out) {
         NetBuffer copy = buffer;
         copy.ResetRead();
-        return copy.ReadU32(out.preferredUserId) && copy.ReadString(out.displayName);
+        if (!copy.ReadU32(out.preferredUserId) || !copy.ReadString(out.displayName)) {
+            return false;
+        }
+        if (!copy.ReadString(out.username)) {
+            out.username.clear();
+        }
+        if (!copy.ReadString(out.password)) {
+            out.password.clear();
+        }
+        if (!copy.ReadString(out.authToken)) {
+            out.authToken.clear();
+        }
+        return true;
     }
 };
 

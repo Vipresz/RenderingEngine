@@ -5,6 +5,8 @@
 #include <chrono>
 #include <random>
 #include <thread>
+#include <algorithm>
+#include <cctype>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -22,6 +24,34 @@ uint64_t GenerateSessionToken() {
     const uint64_t a = (static_cast<uint64_t>(rd()) << 32) | static_cast<uint64_t>(rd());
     const uint64_t b = (static_cast<uint64_t>(rd()) << 32) | static_cast<uint64_t>(rd());
     return a ^ b;
+}
+
+std::string SanitizeDisplayName(const std::string& raw) {
+    const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
+    auto begin = std::find_if(raw.begin(), raw.end(), notSpace);
+    if (begin == raw.end()) {
+        return {};
+    }
+    auto end = std::find_if(std::make_reverse_iterator(raw.end()),
+                            std::make_reverse_iterator(begin),
+                            notSpace)
+                   .base();
+
+    std::string trimmed(begin, end);
+    trimmed.erase(std::remove_if(trimmed.begin(),
+                                 trimmed.end(),
+                                 [](unsigned char c) { return c < 32 || c == 127; }),
+                  trimmed.end());
+
+    constexpr size_t kMaxDisplayNameLength = 32;
+    if (trimmed.size() > kMaxDisplayNameLength) {
+        trimmed.resize(kMaxDisplayNameLength);
+    }
+    return trimmed;
+}
+
+bool AuthTokenMatches(const std::string& required, const std::string& provided) {
+    return required.empty() || required == provided;
 }
 
 } // namespace
@@ -46,6 +76,7 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
     m_listenSocket = Socket::CreateTcp();
     if (!m_listenSocket.IsValid() ||
         !m_listenSocket.SetReuseAddress(true) ||
+        !m_listenSocket.SetNonBlocking(true) ||
         !m_listenSocket.Bind(host, port) ||
         !m_listenSocket.Listen(16)) {
         LOG_ERROR_FMT("NetServer", "Failed to bind/listen on %s:%u", host.c_str(), port);
@@ -58,6 +89,10 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
     } else {
         m_udpChannel.SetUnreliableTransformHandler(
             [this](const Engine::Net::TransformStatePayload& transform, const UdpDatagramContext& context) {
+                // Authoritative mode ignores client-originated transforms; movement commands only.
+                if (m_authoritativeMode) {
+                    return;
+                }
                 const Engine::Net::UserId userId = ResolveUdpUser(context);
                 if (userId == Engine::Net::kInvalidUserId) {
                     return;
@@ -82,10 +117,14 @@ void NetServer::Stop() {
     m_running = false;
     m_listenSocket.Close();
     m_udpChannel.Close();
-    m_lastTransforms.clear();
-    m_endpointToUser.clear();
-    m_userToEndpoint.clear();
-    m_interestManager = InterestManager();
+    {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        m_lastTransforms.clear();
+        m_endpointToUser.clear();
+        m_userToEndpoint.clear();
+        m_interestManager = InterestManager();
+        m_authority = ServerAuthority();
+    }
 
     if (m_acceptThread.joinable()) {
         m_acceptThread.join();
@@ -136,6 +175,36 @@ void NetServer::SendWorldSnapshotTo(Engine::Net::UserId userId, const Engine::Ne
                              Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++));
 }
 
+void NetServer::BroadcastPacket(const Engine::Net::NetPacket& message, Engine::Net::UserId excludeUserId) {
+    Broadcast(message, excludeUserId);
+}
+
+void NetServer::BroadcastPacketToInterested(const Engine::Net::NetPacket& message,
+                                            Engine::Net::UserId sourceUserId,
+                                            const glm::vec3& sourcePosition,
+                                            Engine::Net::UserId excludeUserId) {
+    BroadcastToInterested(message, sourceUserId, sourcePosition, excludeUserId);
+}
+
+bool NetServer::SendPacketToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message) {
+    return SendToClient(userId, message);
+}
+
+void NetServer::StoreAuthoritativeTransform(Engine::Net::UserId userId,
+                                            const Engine::Net::TransformStatePayload& transform) {
+    std::lock_guard<std::mutex> lock(m_worldMutex);
+    m_lastTransforms[userId] = transform;
+    m_authority.ApplyAuthoritative(userId, transform);
+    m_interestManager.UpdateEntity(userId, transform.position);
+}
+
+void NetServer::ClearClientWorldState(Engine::Net::UserId userId) {
+    std::lock_guard<std::mutex> lock(m_worldMutex);
+    m_lastTransforms.erase(userId);
+    m_authority.RemoveUser(userId);
+    m_interestManager.RemoveEntity(userId);
+}
+
 void NetServer::AcceptLoop() {
     while (m_running) {
         m_udpChannel.Poll();
@@ -149,6 +218,10 @@ void NetServer::AcceptLoop() {
         auto client = std::make_unique<ConnectedClient>();
         client->userId = userId;
         client->connection = std::make_unique<NetworkConnection>(std::move(clientSocket));
+        if (m_tlsConfig.enabled && !client->connection->EnableTlsServer(m_tlsConfig)) {
+            LOG_WARNING_FMT("NetServer", "TLS handshake failed for pending user %u", userId);
+            continue;
+        }
         client->receiveThread = std::thread([this, userId]() { ClientReceiveLoop(userId); });
 
         {
@@ -220,9 +293,13 @@ void NetServer::RemoveClient(Engine::Net::UserId userId) {
 
     if (wasLoggedIn) {
         ClearUdpEndpoint(userId);
+        ClearClientWorldState(userId);
         Broadcast(Engine::Net::MakeMessage(
                       Engine::Net::MessageType::PeerLeft, event.Serialize(), m_sequence++),
                   userId);
+        if (m_clientDisconnectedCallback) {
+            m_clientDisconnectedCallback(userId);
+        }
     }
     LOG_INFO_FMT("NetServer", "Client %u disconnected", userId);
 }
@@ -235,9 +312,39 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                 break;
             }
 
-            std::string displayName = request.displayName.empty()
-                ? ("Player" + std::to_string(userId))
-                : request.displayName;
+            if (!AuthTokenMatches(m_requiredAuthToken, request.authToken)) {
+                Engine::Net::LoginResponsePayload response;
+                response.success = false;
+                response.assignedUserId = userId;
+                response.message = "unauthorized";
+                SendToClient(userId, Engine::Net::MakeMessage(
+                                         Engine::Net::MessageType::LoginResponse,
+                                         response.Serialize(),
+                                         m_sequence++));
+                LOG_WARNING_FMT("NetServer", "Rejected login for user %u (bad auth token)", userId);
+                break;
+            }
+
+            if (m_credentialStore.RequiresCredentials()) {
+                if (request.username.empty() || request.password.empty() ||
+                    !m_credentialStore.Verify(request.username, request.password)) {
+                    Engine::Net::LoginResponsePayload response;
+                    response.success = false;
+                    response.assignedUserId = userId;
+                    response.message = "invalid_credentials";
+                    SendToClient(userId, Engine::Net::MakeMessage(
+                                             Engine::Net::MessageType::LoginResponse,
+                                             response.Serialize(),
+                                             m_sequence++));
+                    LOG_WARNING_FMT("NetServer", "Rejected login for user %u (invalid credentials)", userId);
+                    break;
+                }
+            }
+
+            std::string displayName = SanitizeDisplayName(request.displayName);
+            if (displayName.empty()) {
+                displayName = "Player" + std::to_string(userId);
+            }
 
             {
                 std::lock_guard<std::mutex> lock(m_clientsMutex);
@@ -274,9 +381,15 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
             SendExistingPeersTo(userId);
             SendExistingPeerTransformsTo(userId);
             LOG_INFO_FMT("NetServer", "Client logged in as %u (%s)", userId, displayName.c_str());
+            if (m_clientLoggedInCallback) {
+                m_clientLoggedInCallback(userId, displayName);
+            }
             break;
         }
         case Engine::Net::MessageType::TransformState: {
+            if (m_authoritativeMode) {
+                break;
+            }
             Engine::Net::TransformStatePayload transform;
             if (!Engine::Net::TransformStatePayload::Deserialize(message.payload, transform)) {
                 break;
@@ -288,6 +401,10 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
         case Engine::Net::MessageType::EntitySnapshot:
         case Engine::Net::MessageType::ComponentSnapshot:
         case Engine::Net::MessageType::WorldSnapshot: {
+            // In authoritative mode only the server publishes snapshots.
+            if (m_authoritativeMode) {
+                break;
+            }
             Broadcast(message, userId);
             break;
         }
@@ -297,6 +414,14 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                 break;
             }
             generic.userId = userId;
+            if (m_genericDataInterceptor && m_genericDataInterceptor(userId, generic)) {
+                break;
+            }
+            // Authoritative servers only accept interceptor-handled channels
+            // (movement/loadout); never peer-relay arbitrary GenericData.
+            if (m_authoritativeMode) {
+                break;
+            }
             Broadcast(Engine::Net::MakeMessage(
                           Engine::Net::MessageType::GenericData, generic.Serialize(), m_sequence++),
                       userId);
@@ -314,9 +439,12 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 void NetServer::HandleUnreliableTransform(Engine::Net::UserId userId,
                                           const Engine::Net::TransformStatePayload& transform) {
     Engine::Net::TransformStatePayload last = transform;
-    const auto lastIt = m_lastTransforms.find(userId);
-    if (lastIt != m_lastTransforms.end()) {
-        last = lastIt->second;
+    {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        const auto lastIt = m_lastTransforms.find(userId);
+        if (lastIt != m_lastTransforms.end()) {
+            last = lastIt->second;
+        }
     }
 
     AuthorityValidationResult validation = m_authority.ValidateTransform(transform, last, 1.0f / 60.0f);
@@ -327,21 +455,28 @@ void NetServer::HandleUnreliableTransform(Engine::Net::UserId userId,
         authoritative.rotationDegrees = validation.correctedRotationDegrees;
     }
 
-    m_authority.ApplyAuthoritative(userId, authoritative);
-    m_lastTransforms[userId] = authoritative;
-    m_interestManager.UpdateEntity(userId, authoritative.position);
+    {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        m_authority.ApplyAuthoritative(userId, authoritative);
+        m_lastTransforms[userId] = authoritative;
+        m_interestManager.UpdateEntity(userId, authoritative.position);
+    }
 
     const Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
         Engine::Net::MessageType::TransformState, authoritative.Serialize(), m_sequence++);
     BroadcastToInterested(packet, userId, authoritative.position, userId);
+    SendToClient(userId, packet);
 }
 
 void NetServer::BroadcastToInterested(const Engine::Net::NetPacket& message,
                                       Engine::Net::UserId sourceUserId,
                                       const glm::vec3& sourcePosition,
                                       Engine::Net::UserId excludeUserId) {
-    const std::vector<Engine::Net::UserId> observers =
-        m_interestManager.GetInterestedObservers(sourceUserId, sourcePosition);
+    std::vector<Engine::Net::UserId> observers;
+    {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        observers = m_interestManager.GetInterestedObservers(sourceUserId, sourcePosition);
+    }
 
     std::lock_guard<std::mutex> lock(m_clientsMutex);
     for (Engine::Net::UserId observerId : observers) {
@@ -397,7 +532,7 @@ void NetServer::SendExistingPeersTo(Engine::Net::UserId newUserId) {
 void NetServer::SendExistingPeerTransformsTo(Engine::Net::UserId newUserId) {
     std::vector<Engine::Net::TransformStatePayload> transforms;
     {
-        std::lock_guard<std::mutex> lock(m_clientsMutex);
+        std::lock_guard<std::mutex> lock(m_worldMutex);
         transforms.reserve(m_lastTransforms.size());
         for (const auto& entry : m_lastTransforms) {
             if (entry.first == newUserId) {

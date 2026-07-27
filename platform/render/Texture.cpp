@@ -205,6 +205,23 @@ bool Texture::LoadFromMemory(const unsigned char* buffer, int len) {
     return true;
 }
 
+bool Texture::LoadSolidColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
+    ClearTexture();
+    const unsigned char pixel[4] = {r, g, b, a};
+    width = 1;
+    height = 1;
+    bitDepth = 4;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_2D, textureID);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return textureID != 0;
+}
+
 bool Texture::LoadTextureUI(int maxSourceDimension) {
     int loadedW = 0;
     int loadedH = 0;

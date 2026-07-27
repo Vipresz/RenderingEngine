@@ -2,9 +2,12 @@
 
 #include "Logger.h"
 #include "core/ecs/Registry.h"
+#include "core/network/CharacterMovementSimulator.h"
+#include "core/network/InputBuffer.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/TransformComponent.h"
+#include "render/components/AnimationComponent.h"
 #include "render/Model.h"
 
 #include <glm/glm.hpp>
@@ -14,6 +17,7 @@ using EngineLogging::Logger;
 using Engine::Platform::Render::Components::MaterialComponent;
 using Engine::Platform::Render::Components::MeshComponent;
 using Engine::Platform::Render::Components::TransformComponent;
+using Engine::Platform::Render::Components::AnimationComponent;
 
 namespace Engine {
 namespace Platform {
@@ -35,6 +39,8 @@ NetworkSystem::NetworkSystem() {
     };
     callbacks.onTransformState = [this](const Engine::Net::TransformStatePayload& transform) {
         if (transform.userId == m_client.GetUserId()) {
+            m_localServerCorrection = transform;
+            m_hasLocalServerCorrection = true;
             return;
         }
         m_pendingTransforms[transform.userId] = transform;
@@ -83,6 +89,8 @@ void NetworkSystem::Disconnect() {
     m_pendingTransforms.clear();
     m_remotePlayback.clear();
     m_peerDisplayNames.clear();
+    m_lastSentCommandTick = 0;
+    m_lastAcknowledgedTick = 0;
 }
 
 Engine::Net::UserId NetworkSystem::GetLocalUserId() const {
@@ -116,6 +124,10 @@ void NetworkSystem::CollectRemotePlayerEntities(std::vector<EntityID>& out) cons
     }
 }
 
+EntityID NetworkSystem::EnsureRemoteEntity(Engine::Net::UserId userId, ECS::Registry& registry) {
+    return GetOrCreateRemoteEntity(userId, registry);
+}
+
 void NetworkSystem::SetSendRateHz(float hz) {
     if (hz <= 0.0f) {
         m_sendIntervalSeconds = 0.0f;
@@ -132,6 +144,20 @@ bool NetworkSystem::SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapsh
 
 bool NetworkSystem::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot) {
     return m_client.SendWorldSnapshot(snapshot);
+}
+
+void NetworkSystem::SendMovementCommand(const Engine::Net::MovementCommand& command) {
+    if (!m_client.IsLoggedIn()) {
+        return;
+    }
+
+    Engine::Net::GenericDataPayload payload;
+    payload.userId = m_client.GetUserId();
+    payload.tick = command.tick;
+    payload.channel = Engine::Net::kMovementCommandChannel;
+    const Engine::Net::NetBuffer buffer = Engine::Net::SerializeMovementCommand(command);
+    payload.data = buffer.Data();
+    m_client.SendGenericData(payload);
 }
 
 void NetworkSystem::Shutdown(ECS::Registry& registry) {
@@ -155,6 +181,10 @@ EntityID NetworkSystem::GetOrCreateRemoteEntity(Engine::Net::UserId userId, ECS:
     registry.AddComponent<TransformComponent>(entity.id);
     AttachRemotePlayerVisual(entity.id, registry);
     m_remoteEntities[userId] = entity.id;
+
+    if (m_peerEntityHandler) {
+        m_peerEntityHandler(userId, entity.id);
+    }
 
     if (m_remotePlayerSetupHandler) {
         const auto nameIt = m_peerDisplayNames.find(userId);
@@ -285,6 +315,115 @@ void NetworkSystem::SetRemoteTarget(Engine::Net::UserId userId,
     }
 }
 
+void NetworkSystem::ApplyLocalServerCorrection(ECS::Registry& registry) {
+    if (!m_hasLocalServerCorrection || m_localPlayerEntity == INVALID_ENTITY) {
+        return;
+    }
+
+    if (m_clientPredictionEnabled && m_inputBuffer) {
+        ReconcileWithRollback(registry, m_localServerCorrection);
+        m_hasLocalServerCorrection = false;
+        return;
+    }
+
+    TransformComponent* transform = registry.GetComponent<TransformComponent>(m_localPlayerEntity);
+    if (!transform) {
+        m_hasLocalServerCorrection = false;
+        return;
+    }
+
+    constexpr float kSnapDistanceSq = 0.5f * 0.5f;
+    const glm::vec3 delta = m_localServerCorrection.position - transform->position;
+    if (glm::dot(delta, delta) > kSnapDistanceSq) {
+        transform->position = m_localServerCorrection.position;
+        transform->rotation = m_localServerCorrection.rotationDegrees;
+    } else {
+        transform->position = glm::mix(transform->position, m_localServerCorrection.position, 0.25f);
+        transform->rotation =
+            LerpAnglesDegrees(transform->rotation, m_localServerCorrection.rotationDegrees, 0.25f);
+    }
+
+    m_hasLocalServerCorrection = false;
+}
+
+void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
+                                          const Engine::Net::TransformStatePayload& serverState) {
+    if (m_localPlayerEntity == INVALID_ENTITY || !m_inputBuffer) {
+        return;
+    }
+
+    TransformComponent* transform = registry.GetComponent<TransformComponent>(m_localPlayerEntity);
+    if (!transform) {
+        return;
+    }
+
+    auto* animComp = registry.GetComponent<AnimationComponent>(m_localPlayerEntity);
+
+    if (serverState.tick <= m_lastAcknowledgedTick) {
+        return;
+    }
+    m_lastAcknowledgedTick = serverState.tick;
+
+    Engine::Net::CharacterMovementState state;
+    state.position = serverState.position;
+    state.yawDegrees = serverState.rotationDegrees.y;
+    bool replayed = false;
+    if (animComp) {
+        state.isJumping = animComp->isJumping;
+        state.jumpVelocity = animComp->jumpVelocity;
+        state.groundLevel = animComp->groundLevel;
+        state.gravity = animComp->gravity;
+        state.jumpInitialVelocity = animComp->jumpInitialVelocity;
+        state.airVelocityX = animComp->airVelocityX;
+        state.airVelocityZ = animComp->airVelocityZ;
+        state.jumpAnimationActive = animComp->jumpAnimationActive;
+    }
+
+    const Engine::Net::TerrainHeightSampler terrainSampler =
+        m_terrainModel ? Engine::Net::TerrainHeightSampler(
+                             [terrain = m_terrainModel](float x, float z) {
+                                 return terrain->GetHeightAt(x, z);
+                             })
+                       : Engine::Net::TerrainHeightSampler();
+
+    m_inputBuffer->ForEachAfter(serverState.tick, [&](const Engine::Net::MovementCommand& command) {
+        Engine::Net::CharacterMovementSimulator::SimulateStep(state, command, terrainSampler);
+        replayed = true;
+    });
+
+    transform->position = state.position;
+    transform->SetYaw(state.yawDegrees);
+    transform->rotation.x = serverState.rotationDegrees.x;
+    transform->rotation.z = serverState.rotationDegrees.z;
+
+    if (!animComp || !replayed) {
+        return;
+    }
+
+    animComp->isJumping = state.isJumping;
+    animComp->jumpVelocity = state.jumpVelocity;
+    animComp->groundLevel = state.groundLevel;
+    animComp->airVelocityX = state.airVelocityX;
+    animComp->airVelocityZ = state.airVelocityZ;
+    animComp->jumpAnimationActive = state.jumpAnimationActive;
+    switch (state.animationState) {
+        case Engine::Net::MovementAnimationState::Walking:
+            animComp->currentState = AnimationComponent::AnimationState::Walking;
+            break;
+        case Engine::Net::MovementAnimationState::Running:
+            animComp->currentState = AnimationComponent::AnimationState::Running;
+            break;
+        case Engine::Net::MovementAnimationState::Jumping:
+            animComp->currentState = AnimationComponent::AnimationState::Jumping;
+            break;
+        case Engine::Net::MovementAnimationState::Idle:
+        default:
+            animComp->currentState = AnimationComponent::AnimationState::Idle;
+            break;
+    }
+    animComp->isRunning = animComp->currentState == AnimationComponent::AnimationState::Running;
+}
+
 void NetworkSystem::InterpolateRemoteTransforms(float deltaTime, ECS::Registry& registry) {
     if (m_remotePlayback.empty()) {
         return;
@@ -336,7 +475,22 @@ void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t ti
         it = m_pendingTransforms.erase(it);
     }
 
+    ApplyLocalServerCorrection(registry);
     InterpolateRemoteTransforms(deltaTime, registry);
+
+    if (m_authoritativeClient) {
+        if (m_inputBuffer && m_client.IsLoggedIn()) {
+            uint64_t highestSent = m_lastSentCommandTick;
+            m_inputBuffer->ForEachAfter(m_lastSentCommandTick, [&](const Engine::Net::MovementCommand& command) {
+                SendMovementCommand(command);
+                if (command.tick > highestSent) {
+                    highestSent = command.tick;
+                }
+            });
+            m_lastSentCommandTick = highestSent;
+        }
+        return;
+    }
 
     m_sendAccumulator += deltaTime;
     const bool intervalElapsed =

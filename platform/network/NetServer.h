@@ -3,7 +3,9 @@
 #include "core/network/NetPacket.h"
 #include "core/network/NetworkPayloads.h"
 #include "core/network/ReplicationTypes.h"
+#include "core/network/CredentialStore.h"
 #include "network/InterestManager.h"
+#include "network/TlsSession.h"
 #include "network/MessageQueue.h"
 #include "network/NetworkConnection.h"
 #include "network/ServerAuthority.h"
@@ -12,6 +14,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -39,6 +42,13 @@ public:
     bool Start(const std::string& host, uint16_t port, uint16_t udpPort = Engine::Net::kDefaultUdpPort);
     void Stop();
 
+    void SetRequiredAuthToken(std::string token) { m_requiredAuthToken = std::move(token); }
+    const std::string& GetRequiredAuthToken() const { return m_requiredAuthToken; }
+
+    Engine::Net::CredentialStore& GetCredentialStore() { return m_credentialStore; }
+    const Engine::Net::CredentialStore& GetCredentialStore() const { return m_credentialStore; }
+    void SetTlsConfig(const TlsConfig& config) { m_tlsConfig = config; }
+
     bool IsRunning() const { return m_running; }
     size_t GetClientCount() const;
 
@@ -52,6 +62,32 @@ public:
     void BroadcastWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot,
                                 Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
     void SendWorldSnapshotTo(Engine::Net::UserId userId, const Engine::Net::WorldSnapshotPayload& snapshot);
+    void BroadcastPacket(const Engine::Net::NetPacket& message,
+                         Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    void BroadcastPacketToInterested(const Engine::Net::NetPacket& message,
+                                     Engine::Net::UserId sourceUserId,
+                                     const glm::vec3& sourcePosition,
+                                     Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    bool SendPacketToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
+    void StoreAuthoritativeTransform(Engine::Net::UserId userId,
+                                     const Engine::Net::TransformStatePayload& transform);
+    void ClearClientWorldState(Engine::Net::UserId userId);
+
+    using ClientLoggedInCallback = std::function<void(Engine::Net::UserId, const std::string& displayName)>;
+    using ClientDisconnectedCallback = std::function<void(Engine::Net::UserId)>;
+    using GenericDataInterceptor = std::function<bool(Engine::Net::UserId, Engine::Net::GenericDataPayload&)>;
+
+    void SetClientLoggedInCallback(ClientLoggedInCallback callback) {
+        m_clientLoggedInCallback = std::move(callback);
+    }
+    void SetClientDisconnectedCallback(ClientDisconnectedCallback callback) {
+        m_clientDisconnectedCallback = std::move(callback);
+    }
+    void SetGenericDataInterceptor(GenericDataInterceptor interceptor) {
+        m_genericDataInterceptor = std::move(interceptor);
+    }
+    void SetAuthoritativeMode(bool enabled) { m_authoritativeMode = enabled; }
+    bool IsAuthoritativeMode() const { return m_authoritativeMode; }
 
 private:
     void AcceptLoop();
@@ -84,12 +120,20 @@ private:
     std::thread m_acceptThread;
 
     mutable std::mutex m_clientsMutex;
+    mutable std::mutex m_worldMutex;
     std::unordered_map<Engine::Net::UserId, std::unique_ptr<ConnectedClient>> m_clients;
     std::unordered_map<Engine::Net::UserId, Engine::Net::TransformStatePayload> m_lastTransforms;
     std::unordered_map<std::string, Engine::Net::UserId> m_endpointToUser;
     std::unordered_map<Engine::Net::UserId, std::string> m_userToEndpoint;
     Engine::Net::UserId m_nextUserId = 1;
-    uint64_t m_sequence = 1;
+    std::atomic<uint64_t> m_sequence{1};
+    std::string m_requiredAuthToken;
+    Engine::Net::CredentialStore m_credentialStore;
+    TlsConfig m_tlsConfig;
+    ClientLoggedInCallback m_clientLoggedInCallback;
+    ClientDisconnectedCallback m_clientDisconnectedCallback;
+    GenericDataInterceptor m_genericDataInterceptor;
+    bool m_authoritativeMode = false;
 
     std::atomic<bool> m_running{false};
 };

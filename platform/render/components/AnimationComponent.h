@@ -22,6 +22,7 @@ struct AnimationComponent {
     AnimationState currentState = AnimationState::Idle;
     
     // Animation references (managed externally, set by main.cpp)
+    Animation* idleAnimation = nullptr;
     Animation* walkingAnimation = nullptr;
     Animation* runningAnimation = nullptr;
     Animation* jumpAnimation = nullptr;
@@ -42,6 +43,9 @@ struct AnimationComponent {
     float gravity = -9.81f; // Gravity acceleration (units per second^2)
     float jumpInitialVelocity = 5.0f; // Initial jump velocity when space is pressed
     float groundLevel = 0.0f; // Y position of the ground (for landing detection)
+    float airVelocityX = 0.0f;
+    float airVelocityZ = 0.0f;
+    bool jumpAnimationActive = false;
     
     // Movement state
     bool isRunning = false; // True when Shift+W is pressed

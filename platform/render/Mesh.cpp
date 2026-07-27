@@ -41,7 +41,12 @@ void Mesh::CreateMesh(GLfloat* vertices, unsigned int* indices,
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(vertices[0]) * 8, (void*)(sizeof(vertices[0]) * 5));
     glEnableVertexAttribArray(2);
 
-    // Shader reads layout(location=5) vertexColor — default disabled with zeros so fragments can fall back cleanly.
+    // Shader always declares bone + color attributes — disable and zero so non-skinned
+    // meshes stay intact if boneCount is accidentally left non-zero.
+    glDisableVertexAttribArray(3);
+    glVertexAttribI4i(3, 0, 0, 0, 0);
+    glDisableVertexAttribArray(4);
+    glVertexAttrib4f(4, 0.0f, 0.0f, 0.0f, 0.0f);
     glDisableVertexAttribArray(5);
     glVertexAttrib3f(5, 0.0f, 0.0f, 0.0f);
 

@@ -1,11 +1,42 @@
 #include "render/passes/OpaqueRenderPass.h"
 
+#include "render/components/AnimationComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
+#include "render/Skeleton.h"
 
 #include <GL/glew.h>
+
+#include <algorithm>
+#include <vector>
+
+namespace {
+
+constexpr int kMaxShaderBones = 100;
+
+void UploadBoneUniforms(GLuint shaderProgramID, const Engine::Platform::Render::Skeleton* skeleton) {
+    const GLint uniformBoneCount = glGetUniformLocation(shaderProgramID, "boneCount");
+    const GLint uniformBoneTransforms = glGetUniformLocation(shaderProgramID, "boneTransforms");
+
+    // Bind pose / no skeleton: disable GPU skinning so mesh verts stay as authored.
+    int boneCount = 0;
+    if (skeleton && skeleton->IsLoaded() && !skeleton->IsBindPoseActive()) {
+        std::vector<glm::mat4> boneMatrices;
+        skeleton->GetFinalBoneMatrices(boneMatrices);
+        boneCount = static_cast<int>(std::min(boneMatrices.size(), static_cast<size_t>(kMaxShaderBones)));
+        if (uniformBoneTransforms != -1 && boneCount > 0) {
+            glUniformMatrix4fv(uniformBoneTransforms, boneCount, GL_FALSE, glm::value_ptr(boneMatrices[0]));
+        }
+    }
+
+    if (uniformBoneCount != -1) {
+        glUniform1i(uniformBoneCount, boneCount);
+    }
+}
+
+} // namespace
 
 namespace Engine {
 namespace Platform {
@@ -53,7 +84,7 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
     if (uniformDirectionalLightColour != -1) glUniform3f(uniformDirectionalLightColour, 1.0f, 1.0f, 1.0f);
     if (uniformDirectionalLightAmbient != -1) glUniform1f(uniformDirectionalLightAmbient, 0.3f);
     if (uniformDirectionalLightDiffuse != -1) glUniform1f(uniformDirectionalLightDiffuse, 0.7f);
-    if (uniformDirectionalLightDirection != -1) glUniform3f(uniformDirectionalLightDirection, 0.0f, -1.0f, -0.5f);
+    if (uniformDirectionalLightDirection != -1) glUniform3f(uniformDirectionalLightDirection, 0.3f, -1.0f, 0.2f);
 
     context.shader->SetTexture(1);
     if (context.defaultWhiteTexture != 0) {
@@ -87,13 +118,12 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
         if (uniformSpecularIntensity != -1) glUniform1f(uniformSpecularIntensity, specularIntensity);
         if (uniformShininess != -1) glUniform1f(uniformShininess, shininess);
 
-        const GLint uniformBoneCount = glGetUniformLocation(shaderProgramID, "boneCount");
-        if (uniformBoneCount != -1) {
-            glUniform1i(uniformBoneCount, 0);
-        }
+        const auto* animComp = context.registry->GetComponent<Components::AnimationComponent>(entityID);
+        UploadBoneUniforms(shaderProgramID, animComp ? animComp->skeleton : nullptr);
 
         if (meshComp->model) {
-            meshComp->model->RenderModel();
+            const GLint uniformUseTexture = glGetUniformLocation(shaderProgramID, "useTexture");
+            meshComp->model->RenderModelPerMeshTexture(uniformUseTexture);
         }
     }
 }

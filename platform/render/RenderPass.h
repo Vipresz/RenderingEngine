@@ -20,6 +20,7 @@ struct RenderContext {
     uint64_t tickNumber = 0;
     GLuint defaultWhiteTexture = 0;
     GLuint shadowMapTexture = 0;
+    glm::mat4 directionalLightTransform{1.0f};
 };
 
 enum class RenderPassType {

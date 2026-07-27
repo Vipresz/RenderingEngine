@@ -41,6 +41,13 @@ bool NetClient::Connect(const std::string& host, uint16_t port) {
     }
 
     m_connection = std::make_unique<NetworkConnection>(std::move(socket));
+    if (m_tlsConfig.enabled &&
+        !m_connection->EnableTlsClient(m_tlsConfig)) {
+        LOG_ERROR("NetClient", "TLS handshake failed");
+        m_connection.reset();
+        return false;
+    }
+
     m_host = host;
     m_running = true;
     m_connected = true;
@@ -65,14 +72,22 @@ bool NetClient::ConnectUdp(const std::string& host, uint16_t udpPort) {
     return true;
 }
 
-bool NetClient::Login(const std::string& displayName, Engine::Net::UserId preferredUserId) {
+bool NetClient::Login(const std::string& displayName,
+                      Engine::Net::UserId preferredUserId,
+                      const std::string& username,
+                      const std::string& password) {
     if (!m_connected || !m_connection) {
         return false;
     }
 
+    m_loginRejected = false;
+
     Engine::Net::LoginRequestPayload request;
     request.displayName = displayName;
     request.preferredUserId = preferredUserId;
+    request.username = username.empty() ? m_username : username;
+    request.password = password.empty() ? m_password : password;
+    request.authToken = m_authToken;
     const Engine::Net::NetPacket message =
         Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
 
@@ -86,6 +101,10 @@ bool NetClient::Login(const std::string& displayName, Engine::Net::UserId prefer
         if (m_loggedIn) {
             LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
             return true;
+        }
+        if (m_loginRejected) {
+            LOG_ERROR("NetClient", "Login rejected by server");
+            return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -217,6 +236,7 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
                 m_userId = response.assignedUserId;
                 m_udpSessionToken = response.udpSessionToken;
             } else {
+                m_loginRejected = true;
                 LOG_ERROR_FMT("NetClient", "Login failed: %s", response.message.c_str());
             }
             break;

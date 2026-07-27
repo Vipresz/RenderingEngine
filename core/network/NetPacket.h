@@ -59,6 +59,10 @@ inline bool DeserializePacket(const uint8_t* data, size_t size, NetPacket& outMe
         return false;
     }
 
+    if (outMessage.header.payloadSize > kMaxPayloadBytes) {
+        return false;
+    }
+
     if (buffer.Remaining() != outMessage.header.payloadSize) {
         return false;
     }

@@ -59,6 +59,19 @@ void AudioSystem::Play3D(const std::string& path, const glm::vec3& position, flo
     m_backend->Play3D(LoadSound(path), position, volume, loop);
 }
 
+void AudioSystem::Stop(const std::string& path) {
+    if (!m_backend) {
+        return;
+    }
+
+    const auto it = m_soundCache.find(path);
+    if (it == m_soundCache.end()) {
+        return;
+    }
+
+    m_backend->Stop(it->second);
+}
+
 void AudioSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) {
     (void)deltaTime;
     (void)registry;

@@ -1,5 +1,6 @@
 #include "render/Animation.h"
 #include "Logger.h"
+#include <assimp/config.h>
 #include <algorithm>
 #include <cmath>
 
@@ -24,7 +25,10 @@ bool Animation::LoadAnimation(const std::string& filePath) {
     m_ticksPerSecond = 25.0f;
     
     Assimp::Importer importer;
-    
+    // Collapse FBX pivot chains so channels are named mixamorig:Bone, not
+    // mixamorig:Bone_$AssimpFbx$_Rotation (those never match skeleton bones).
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+
     // Import animation file - for animations, we only need basic processing
     // We're loading animation data, not meshes, so minimal post-processing is needed
     const aiScene* scene = importer.ReadFile(
@@ -33,11 +37,13 @@ bool Animation::LoadAnimation(const std::string& filePath) {
         aiProcess_JoinIdenticalVertices
     );
     
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+    if (!scene || !scene->mRootNode) {
         LOG_ERROR_FMT("Animation", "Failed to load animation file: %s", filePath.c_str());
         LOG_ERROR_FMT("Animation", "Assimp error: %s", importer.GetErrorString());
         return false;
     }
+
+    // Animation-only FBX exports often set AI_SCENE_FLAGS_INCOMPLETE; still usable if clips exist.
     
     if (!scene->HasAnimations()) {
         LOG_WARNING_FMT("Animation", "Animation file %s has no animations", filePath.c_str());

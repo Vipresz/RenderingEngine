@@ -4,6 +4,7 @@
 #include "core/Types.h"
 #include "core/ecs/Registry.h"
 #include "core/ecs/Entity.h"
+#include "core/network/InputBuffer.h"
 #include "render/Window.h"
 #include "render/components/TransformComponent.h"
 #include <functional>
@@ -54,6 +55,9 @@ public:
     // When false, game code handles camera mouse/scroll (e.g. LMB-only orbit)
     void SetBuiltInCameraInputEnabled(bool enabled) { m_builtInCameraInput = enabled; }
 
+    Engine::Net::InputBuffer& GetInputBuffer() { return m_inputBuffer; }
+    const Engine::Net::InputBuffer& GetInputBuffer() const { return m_inputBuffer; }
+
 private:
     Window* m_window = nullptr;
     Render::ICameraSource* m_cameraSource = nullptr;
@@ -71,10 +75,11 @@ private:
     std::function<bool()> m_inputBlockQuery;
     std::function<void()> m_escapeCallback;
     bool m_builtInCameraInput = true;
+    Engine::Net::InputBuffer m_inputBuffer;
     
     bool IsGameInputBlocked() const { return m_inputBlockQuery && m_inputBlockQuery(); }
     void HandleCameraInput(float deltaTime);
-    void HandleCharacterMovement(float deltaTime, ECS::Registry& registry);
+    void HandleCharacterMovement(float deltaTime, ECS::Registry& registry, uint64_t tickNumber);
 };
 
 } // namespace Systems

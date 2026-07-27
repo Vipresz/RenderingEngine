@@ -1,20 +1,36 @@
 #include <gtest/gtest.h>
 
 #include "core/network/NetworkPayloads.h"
+#include "core/network/NetBuffer.h"
 
 using Engine::Net::LoginRequestPayload;
 using Engine::Net::LoginResponsePayload;
+using Engine::Net::NetBuffer;
 using Engine::Net::TransformStatePayload;
 
 TEST(NetworkPayloadsTest, LoginRequestRoundTrip) {
     LoginRequestPayload original;
     original.preferredUserId = 42;
     original.displayName = "TestPlayer";
+    original.authToken = "dev-secret";
 
     LoginRequestPayload decoded;
     ASSERT_TRUE(LoginRequestPayload::Deserialize(original.Serialize(), decoded));
     EXPECT_EQ(decoded.preferredUserId, 42u);
     EXPECT_EQ(decoded.displayName, "TestPlayer");
+    EXPECT_EQ(decoded.authToken, "dev-secret");
+}
+
+TEST(NetworkPayloadsTest, LoginRequestLegacyPayloadWithoutAuthToken) {
+    NetBuffer legacy;
+    legacy.WriteU32(5);
+    legacy.WriteString("LegacyPlayer");
+
+    LoginRequestPayload decoded;
+    ASSERT_TRUE(LoginRequestPayload::Deserialize(legacy, decoded));
+    EXPECT_EQ(decoded.preferredUserId, 5u);
+    EXPECT_EQ(decoded.displayName, "LegacyPlayer");
+    EXPECT_TRUE(decoded.authToken.empty());
 }
 
 TEST(NetworkPayloadsTest, LoginResponseRoundTrip) {

@@ -11,6 +11,7 @@ constexpr uint16_t kDefaultPort = 7777;
 constexpr uint16_t kDefaultUdpPort = 7778;
 constexpr uint32_t kUdpChannelMagic = 0x41574E55u; // 'AWNU'
 constexpr uint32_t kInvalidUserId = 0;
+constexpr uint32_t kMaxPayloadBytes = 256u * 1024u; // 256 KiB hard cap for TCP payloads
 
 using UserId = uint32_t;
 using MessageTypeId = uint16_t;

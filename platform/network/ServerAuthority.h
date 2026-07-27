@@ -35,7 +35,8 @@ public:
                                                 float deltaSeconds) const;
 
     void ApplyAuthoritative(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& state);
-  const Engine::Net::TransformStatePayload* GetAuthoritative(Engine::Net::UserId userId) const;
+    const Engine::Net::TransformStatePayload* GetAuthoritative(Engine::Net::UserId userId) const;
+    void RemoveUser(Engine::Net::UserId userId) { m_authoritativeStates.erase(userId); }
 
 private:
     float m_maxSpeed = 25.0f;

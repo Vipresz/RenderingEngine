@@ -2,6 +2,7 @@
 #include "render/MeshAssetResolve.h"
 #include "Logger.h"
 #include "stb_image.h"
+#include <assimp/config.h>
 #include <cstdio>
 #include <algorithm>
 #include <stdexcept>
@@ -112,12 +113,14 @@ void Model::LoadModel(const std::string& fileName) {
     }
 
     Assimp::Importer importer;
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
     const aiScene* scene = importer.ReadFile(
         pathToRead,
         aiProcess_Triangulate |
         aiProcess_FlipUVs |
         aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices
+        aiProcess_JoinIdenticalVertices |
+        aiProcess_LimitBoneWeights
     );
     
         if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -451,6 +454,25 @@ void Model::LoadMaterials(const aiScene* scene) {
                     LOG_INFO_FMT("Model", "Material %zu: diffuse from filesystem fallback '%s'", i,
                                  cand.string().c_str());
                     break;
+                }
+            }
+        }
+
+        if (!m_textureList[i]) {
+            aiColor4D diffuse(0.75f, 0.75f, 0.75f, 1.0f);
+            if (material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse) == AI_SUCCESS) {
+                auto* solid = new Texture();
+                const unsigned char r = static_cast<unsigned char>(std::clamp(diffuse.r, 0.0f, 1.0f) * 255.0f);
+                const unsigned char g = static_cast<unsigned char>(std::clamp(diffuse.g, 0.0f, 1.0f) * 255.0f);
+                const unsigned char b = static_cast<unsigned char>(std::clamp(diffuse.b, 0.0f, 1.0f) * 255.0f);
+                const unsigned char a = static_cast<unsigned char>(std::clamp(diffuse.a, 0.0f, 1.0f) * 255.0f);
+                if (solid->LoadSolidColor(r, g, b, a)) {
+                    m_textureList[i] = solid;
+                    LOG_INFO_FMT("Model",
+                                 "Material %zu: using solid diffuse fallback (%.2f, %.2f, %.2f)",
+                                 i, diffuse.r, diffuse.g, diffuse.b);
+                } else {
+                    delete solid;
                 }
             }
         }

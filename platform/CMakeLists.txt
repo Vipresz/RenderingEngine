@@ -34,8 +34,15 @@ set(PLATFORM_SOURCES
     network/NetworkConnection.cpp
     network/NetClient.cpp
     network/NetServer.cpp
+    network/TlsSession.cpp
+    network/AuthoritativeGameSimulator.cpp
     network/systems/NetworkSystem.cpp
     network/systems/ReplicationSystem.cpp
+    ../core/network/CharacterMovementSimulator.cpp
+    ../core/network/PasswordHasher.cpp
+    ../core/network/CredentialStore.cpp
+    ../core/terrain/HeightmapTerrain.cpp
+    ../core/terrain/HeightmapTerrainImage.cpp
     physics/SimplePhysicsWorld.cpp
     physics/systems/PhysicsSystem.cpp
     audio/NullAudioBackend.cpp
@@ -44,6 +51,11 @@ set(PLATFORM_SOURCES
     ../core/scene/Prefab.cpp
     ../core/scene/SceneSerializer.cpp
 )
+
+option(ENGINE_ENABLE_AUDIO "Enable miniaudio audio backend" ON)
+if(ENGINE_ENABLE_AUDIO)
+    list(APPEND PLATFORM_SOURCES audio/MiniaudioBackend.cpp)
+endif()
 
 # Optional: Nuklear UI (only when NUKLEAR_DIR is set)
 if(DEFINED NUKLEAR_DIR)
@@ -66,6 +78,12 @@ target_include_directories(Platform PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>  # For engine headers
 )
+if(ENGINE_ENABLE_AUDIO)
+    target_include_directories(Platform PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../third_party/miniaudio>)
+    target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_AUDIO)
+    message(STATUS "Audio enabled via miniaudio")
+endif()
 if(DEFINED NUKLEAR_DIR)
     target_include_directories(Platform PRIVATE ${NUKLEAR_DIR} ${NUKLEAR_DIR}/demo/glfw_opengl3)
     target_compile_definitions(Platform PUBLIC PLATFORM_HAS_NUKLEAR)
@@ -75,6 +93,23 @@ target_compile_features(Platform PUBLIC cxx_std_17)
 
 # Link to engine (platform layer uses engine)
 target_link_libraries(Platform PUBLIC Engine)
+
+option(ENGINE_ENABLE_TLS "Enable mbedTLS for encrypted TCP connections" OFF)
+if(ENGINE_ENABLE_TLS)
+    include(FetchContent)
+    FetchContent_Declare(
+        mbedtls
+        GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
+        GIT_TAG v3.6.0
+        GIT_SHALLOW TRUE
+    )
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(mbedtls)
+    target_link_libraries(Platform PRIVATE mbedtls)
+    target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_TLS)
+    message(STATUS "TLS enabled via mbedTLS")
+endif()
 
 # ============================================================================
 # Rendering Dependencies
@@ -358,6 +393,9 @@ endif()
 # Platform-specific libraries
 if(WIN32)
     target_link_libraries(Platform PUBLIC winmm ws2_32)
+    if(ENGINE_ENABLE_AUDIO)
+        target_link_libraries(Platform PRIVATE ole32)
+    endif()
 endif()
 
 # macOS-specific frameworks

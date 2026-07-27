@@ -3,6 +3,7 @@
 #include "core/System.h"
 #include "core/Types.h"
 #include "core/ecs/Registry.h"
+#include "core/network/NetBuffer.h"
 #include "core/network/ReplicationTypes.h"
 
 #include <functional>
@@ -17,6 +18,12 @@ namespace Systems {
 using SnapshotSendHandler = std::function<void(const Engine::Net::EntitySnapshot&)>;
 using SnapshotReceiveHandler = std::function<void(const Engine::Net::EntitySnapshot&, ECS::Registry&)>;
 
+struct ReplicationComponentBinding {
+    Engine::Net::ReplicationComponentId componentId = Engine::Net::kInvalidReplicationComponent;
+    std::function<bool(EntityID, ECS::Registry&, Engine::Net::NetBuffer&)> serialize;
+    std::function<bool(EntityID, ECS::Registry&, const Engine::Net::NetBuffer&)> deserialize;
+};
+
 // Builds and applies component/entity replication snapshots for ECS entities.
 class ReplicationSystem : public ECS::ISystem {
 public:
@@ -24,6 +31,8 @@ public:
 
     Engine::Net::ReplicationRegistry& GetRegistry() { return m_registry; }
     const Engine::Net::ReplicationRegistry& GetRegistry() const { return m_registry; }
+
+    void RegisterComponentBinding(ReplicationComponentBinding binding);
 
     void RegisterReplicatedEntity(Engine::Net::NetEntityId netEntityId, EntityID ecsEntity);
     void UnregisterReplicatedEntity(Engine::Net::NetEntityId netEntityId);
@@ -39,7 +48,10 @@ public:
     void Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) override;
 
 private:
+    void RegisterBuiltInBindings();
+
     Engine::Net::ReplicationRegistry m_registry;
+    std::vector<ReplicationComponentBinding> m_bindings;
     std::unordered_map<Engine::Net::NetEntityId, EntityID> m_netToEcs;
     SnapshotSendHandler m_sendHandler;
     SnapshotReceiveHandler m_receiveHandler;

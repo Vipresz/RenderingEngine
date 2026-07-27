@@ -25,11 +25,18 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/Scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/Prefab.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/SceneSerializer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CharacterMovementSimulator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/PasswordHasher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CredentialStore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/InterestManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ServerAuthority.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/DatagramSocket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/UdpChannel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/Socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetworkConnection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetClient.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/systems/ReplicationSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/physics/SimplePhysicsWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/audio/NullAudioBackend.cpp
@@ -62,6 +69,14 @@ set(ENGINE_TEST_SOURCES
     network/SocketTest.cpp
     network/UdpChannelTest.cpp
     network/ReplicationSystemTest.cpp
+    network/NetServerIntegrationTest.cpp
+    network/CharacterMovementSimulatorTest.cpp
+    network/ClientPredictionTest.cpp
+    core/CredentialStoreTest.cpp
+    core/PasswordHasherTest.cpp
+    core/LoadoutReplicationTest.cpp
+    core/AuthorityHardeningTest.cpp
+    terrain/HeightmapTerrainTest.cpp
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
 )
