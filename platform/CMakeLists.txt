@@ -4,7 +4,7 @@
 # Platform/Render Library
 # ============================================================================
 
-# Platform source files
+# Platform source files (core - always needed for game)
 set(PLATFORM_SOURCES
     render/Window.cpp
     render/Mesh.cpp
@@ -19,11 +19,28 @@ set(PLATFORM_SOURCES
     render/Skeleton.cpp
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
+    render/systems/CameraSystem.cpp
     input/InputSystem.cpp
-    utils/ConsoleRedirect.cpp
-    ui/NuklearUI.cpp
-    ui/NuklearImpl.cpp
+    network/Socket.cpp
+    network/NetworkConnection.cpp
+    network/NetClient.cpp
+    network/NetServer.cpp
+    network/systems/NetworkSystem.cpp
 )
+
+# Optional: Nuklear UI (only when NUKLEAR_DIR is set)
+if(DEFINED NUKLEAR_DIR)
+    list(APPEND PLATFORM_SOURCES
+        utils/ConsoleRedirect.cpp
+        ui/NuklearUI.cpp
+        ui/NuklearImpl.cpp
+        ui/OverlayWindow.cpp
+        ui/Minimap.cpp
+        ui/MenuStyle.cpp
+        ui/FontLibrary.cpp
+        ui/UISystem.cpp
+    )
+endif()
 
 # Create STATIC library for platform layer (since we have .cpp files)
 add_library(Platform STATIC ${PLATFORM_SOURCES})
@@ -34,6 +51,7 @@ target_include_directories(Platform PUBLIC
 )
 if(DEFINED NUKLEAR_DIR)
     target_include_directories(Platform PRIVATE ${NUKLEAR_DIR} ${NUKLEAR_DIR}/demo/glfw_opengl3)
+    target_compile_definitions(Platform PUBLIC PLATFORM_HAS_NUKLEAR)
 endif()
 
 target_compile_features(Platform PUBLIC cxx_std_17)
@@ -322,7 +340,7 @@ endif()
 
 # Platform-specific libraries
 if(WIN32)
-    target_link_libraries(Platform PUBLIC winmm)
+    target_link_libraries(Platform PUBLIC winmm ws2_32)
 endif()
 
 # macOS-specific frameworks

@@ -128,6 +128,17 @@ if(BUILD_ENGINE_EXAMPLES)
     endif()
 endif()
 
+if(BUILD_ENGINE_EXAMPLES)
+    add_executable(NetworkExample
+        examples/NetworkExample.cpp
+    )
+    target_link_libraries(NetworkExample PRIVATE Engine Platform)
+    set_target_properties(NetworkExample PROPERTIES
+        OUTPUT_NAME "network_example"
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+endif()
+
 
 # ============================================================================
 # Future: Add source files here when creating .cpp implementations

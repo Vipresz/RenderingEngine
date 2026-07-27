@@ -12,6 +12,7 @@
 #include "render/components/MaterialComponent.h"
 #include "render/components/AnimationComponent.h"
 #include "render/systems/RenderSystem.h"
+#include "render/systems/CameraSystem.h"
 #include "input/InputSystem.h"
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -149,13 +150,19 @@ int main() {
         SystemManager systemManager;
         
         auto inputSystem = std::make_shared<InputSystem>(&mainWindow);
-        inputSystem->SetFollowCamera(&followCamera);
         inputSystem->SetCharacterEntity(sphere.id);
         inputSystem->SetMovementSpeed(5.0f);
         systemManager.RegisterSystem(inputSystem);
+
+        auto cameraSystem = std::make_shared<CameraSystem>();
+        cameraSystem->SetSource(&followCamera);
+        systemManager.RegisterSystem(cameraSystem);
         
         auto renderSystem = std::make_shared<RenderSystem>(&shader, &followCamera, projection);
         systemManager.RegisterSystem(renderSystem);
+
+        inputSystem->SetCameraSource(&followCamera);
+        renderSystem->SetCameraSource(&followCamera);
         
         systemManager.Initialize(registry);
         

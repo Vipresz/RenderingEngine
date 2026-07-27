@@ -1,6 +1,8 @@
 #include "input/InputSystem.h"
 #include "render/Camera.h"
 #include "render/FollowCamera.h"
+#include "render/ICameraSource.h"
+#include "render/Model.h"
 #include "render/components/TransformComponent.h"
 #include "render/components/AnimationComponent.h"
 #include <GLFW/glfw3.h>
@@ -17,6 +19,14 @@ InputSystem::InputSystem(Window* window) : m_window(window) {
     SetPriority(0); // Input system should run first
 }
 
+void InputSystem::SetCamera(Render::Camera* camera) {
+    m_cameraSource = camera;
+}
+
+void InputSystem::SetFollowCamera(Render::FollowCamera* followCamera) {
+    m_cameraSource = followCamera;
+}
+
 void InputSystem::Initialize(ECS::Registry& registry) {
     // Initialize input state
 }
@@ -26,15 +36,21 @@ void InputSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tick
         return;
     }
     
-    // Poll events (done by window, but ensure it's called)
     m_window->pollEvents();
+
+    bool* keys = m_window->getsKeys();
+    bool escapeJustPressed = keys[GLFW_KEY_ESCAPE] && !m_escapePressedLastFrame;
+    m_escapePressedLastFrame = keys[GLFW_KEY_ESCAPE];
+    if (escapeJustPressed && m_escapeCallback) {
+        m_escapeCallback();
+    }
     
-    // FollowCamera mode: Character moves with WASD, camera follows
-    // Handle character movement FIRST (so camera can follow the new position)
-    HandleCharacterMovement(deltaTime, registry);
-    
-    // Handle camera input AFTER character moves (mouse rotation + scroll wheel zoom)
-    HandleCameraInput(deltaTime);
+    if (!IsGameInputBlocked()) {
+        HandleCharacterMovement(deltaTime, registry);
+        if (m_builtInCameraInput) {
+            HandleCameraInput(deltaTime);
+        }
+    }
 }
 
 void InputSystem::Shutdown(ECS::Registry& registry) {
@@ -42,35 +58,20 @@ void InputSystem::Shutdown(ECS::Registry& registry) {
 }
 
 void InputSystem::HandleCameraInput(float deltaTime) {
-    if (!m_window) {
+    (void)deltaTime;
+    if (!m_window || IsGameInputBlocked() || !m_cameraSource) {
         return;
     }
-    
-    // Handle follow camera if it exists
-    if (m_followCamera) {
-        // Process mouse input for camera rotation (orbit around character)
-        GLfloat xChange = m_window->getXChange();
-        GLfloat yChange = m_window->getYChange();
-        
-        if (xChange != 0.0f || yChange != 0.0f) {
-            m_followCamera->HandleMouseInput(xChange, yChange);
-        }
-        
-        // Process scroll wheel for distance control
-        GLfloat scrollChange = m_window->getScrollYChange();
-        if (scrollChange != 0.0f) {
-            m_followCamera->HandleScrollInput(scrollChange);
-        }
-        
-        // CRITICAL: Update camera position every frame to follow character
-        // This reads the character's current position and updates camera immediately
-        // This happens AFTER character movement, so camera is always synchronized
-        m_followCamera->Update(deltaTime);
-    } else if (m_camera) {
-        // Legacy camera support (mouse look only, no keyboard)
-        GLfloat xChange = m_window->getXChange();
-        GLfloat yChange = m_window->getYChange();
-        m_camera->mouseControl(xChange, yChange);
+
+    GLfloat xChange = m_window->getXChange();
+    GLfloat yChange = m_window->getYChange();
+    if (xChange != 0.0f || yChange != 0.0f) {
+        m_cameraSource->OnMouseMove(xChange, yChange);
+    }
+
+    GLfloat scrollChange = m_window->getScrollYChange();
+    if (scrollChange != 0.0f) {
+        m_cameraSource->OnScroll(scrollChange);
     }
 }
 
@@ -94,15 +95,11 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
     
     // Calculate movement direction relative to camera (WASD controls)
     glm::vec3 moveDirection(0.0f);
-    
-    // Get camera forward and right vectors for camera-relative movement
     glm::vec3 forwardDir(0.0f, 0.0f, 0.0f);
     glm::vec3 rightDir(0.0f, 0.0f, 0.0f);
-    
-    if (m_followCamera) {
-        // Use camera's forward/right directions for movement
-        forwardDir = m_followCamera->GetForwardDirection();
-        rightDir = m_followCamera->GetRightDirection();
+
+    if (m_cameraSource && m_cameraSource->GetMovementBasis(forwardDir, rightDir)) {
+        // Camera-relative movement (e.g. FollowCamera)
     } else {
         // Fallback: use world space directions if no follow camera
         forwardDir = glm::vec3(0.0f, 0.0f, -1.0f);
@@ -141,12 +138,16 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
     
     // Normalize movement direction if not zero
     bool isMoving = glm::length(moveDirection) > 0.0f;
+
+    const bool rmbHeld = m_window->isMouseButtonDown(GLFW_MOUSE_BUTTON_RIGHT) ||
+        (m_window->GetGLFWWindow() &&
+         glfwGetMouseButton(m_window->GetGLFWWindow(), GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS);
     
     if (isMoving) {
         moveDirection = glm::normalize(moveDirection);
         
-        // When moving, make character face the movement direction
-        if (m_followCamera && glm::length(moveDirection) > 0.0f) {
+        // When moving, face movement direction unless RMB is steering the character
+        if (!rmbHeld && glm::length(moveDirection) > 0.0f) {
             // Calculate desired yaw angle from movement direction
             glm::vec3 normalizedMove = glm::normalize(moveDirection);
             float desiredYaw = glm::degrees(std::atan2(-normalizedMove.x, -normalizedMove.z)) + 180.0f;
@@ -179,13 +180,22 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
             }
         }
         
-        // Apply horizontal movement (X and Z only - Y will be handled by jump physics)
+        // Apply horizontal movement (X and Z only - Y will be handled by terrain/jump)
         glm::vec3 horizontalMove = moveDirection;
         horizontalMove.y = 0.0f; // Only horizontal movement
         horizontalMove = glm::normalize(horizontalMove);
         horizontalMove *= currentMovementSpeed * deltaTime;
         transform->Translate(horizontalMove);
-        
+    }
+    
+    // Adhere character to terrain height (when not jumping)
+    if (m_terrainModel && animComp && !animComp->isJumping) {
+        float terrainHeight = m_terrainModel->GetHeightAt(transform->position.x, transform->position.z);
+        transform->position.y = terrainHeight;
+        animComp->groundLevel = terrainHeight;
+    }
+    
+    if (isMoving) {
         // Update animation state
         if (animComp) {
             if (!animComp->isJumping) {
@@ -228,12 +238,13 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
             transform->Translate(glm::vec3(0.0f, verticalMove, 0.0f));
             
             // Check if landed
-            // Character's base Y position should be at groundLevel (where feet touch ground)
-            // Character transform is at character's base, so check if it hits the ground
+            float terrainHeightAtPos = m_terrainModel ? 
+                m_terrainModel->GetHeightAt(transform->position.x, transform->position.z) : animComp->groundLevel;
             float characterBaseY = transform->position.y;
-            if (characterBaseY <= animComp->groundLevel) {
-                // Landed - reset jump state and clamp position to ground
-                transform->position.y = animComp->groundLevel;
+            if (characterBaseY <= terrainHeightAtPos) {
+                // Landed - clamp to terrain height
+                transform->position.y = terrainHeightAtPos;
+                animComp->groundLevel = terrainHeightAtPos;
                 animComp->isJumping = false;
                 animComp->jumpVelocity = 0.0f;
                 

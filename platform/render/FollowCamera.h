@@ -3,6 +3,7 @@
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include "render/ICameraSource.h"
 #include "render/components/TransformComponent.h"
 #include "core/Types.h"
 
@@ -14,22 +15,25 @@ namespace Platform {
 namespace Render {
 
 // Third-person follow camera for RPG-style character control
-// Camera follows character and looks at character's head
-class FollowCamera {
+class FollowCamera : public ICameraSource {
 public:
     FollowCamera();
     
-    // Set the target entity to follow (character) - uses EntityID for safe access
     void SetTarget(EntityID entityID, ECS::Registry* registry);
     
-    // Update camera position based on target - MUST be called every frame
-    void Update(float deltaTime);
+    void Update(float deltaTime) override;
+    void OnMouseMove(float deltaX, float deltaY) override;
+    void OnScroll(float deltaY) override;
+    glm::mat4 GetViewMatrix() const override;
+    glm::vec3 GetEyePosition() const override;
+    bool GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) const override;
+    float GetPlanarFacingYawDegrees() const override;
     
-    // Handle mouse input for camera rotation around target
+    // Legacy aliases (existing game / example code)
     void HandleMouseInput(GLfloat xChange, GLfloat yChange);
-    
-    // Handle mouse wheel for distance control
     void HandleScrollInput(GLfloat scrollDelta);
+    glm::mat4 CalculateViewMatrix() const { return GetViewMatrix(); }
+    glm::vec3 GetCameraPosition() const { return GetEyePosition(); }
     
     // Camera settings
     void SetHeightOffset(float offset) { m_heightOffset = offset; } // Height above character base position (head level)
@@ -44,9 +48,7 @@ public:
     float GetPitch() const { return m_pitch; }
     
     // Get camera position and view matrix
-    glm::vec3 GetCameraPosition() const { return m_cameraPosition; }
     glm::vec3 GetCameraTarget() const { return m_lookAtTarget; }
-    glm::mat4 CalculateViewMatrix() const;
     
     // Get camera direction vectors for character movement (relative to camera view)
     glm::vec3 GetForwardDirection() const; // Forward direction (where camera is looking)

@@ -64,6 +64,22 @@ public:
     // divisions: number of grid divisions (default 10)
     void CreateGrid(float sizeX, float sizeZ, unsigned int divisions = 10);
     
+    // Create terrain from a heightmap image (PNG, etc.)
+    // imagePath: path to heightmap image (pixel luminance = height, dark=low, light=high)
+    // sizeX, sizeZ: world dimensions (e.g. 100 x 100 units)
+    // heightScale: scale factor for height values (default 10.0)
+    // Mapping: image top-left (0,0) at world (0,0); Z axis along pixel rows (columns)
+    // Returns false if image failed to load
+    bool CreateFromHeightmap(const std::string& imagePath, float sizeX, float sizeZ, float heightScale = 10.0f);
+    
+    // Sample terrain height at world position (X, Z). Only valid for heightmap terrain.
+    // Returns height in world units, or 0.0f if not a heightmap or out of bounds.
+    float GetHeightAt(float worldX, float worldZ) const;
+
+    bool HasHeightmapTerrain() const;
+    float GetTerrainWorldSizeX() const { return m_terrainSizeX; }
+    float GetTerrainWorldSizeZ() const { return m_terrainSizeZ; }
+    
     // Get bone name by mesh bone index (for bone remapping)
     // Returns empty string if bone index is invalid
     std::string GetBoneNameByIndex(unsigned int meshBoneIndex) const;
@@ -116,6 +132,11 @@ private:
     
     // Store vertex positions for color application
     std::vector<std::vector<glm::vec3>> m_vertexPositions; // Per-mesh vertex positions
+    
+    // Heightmap terrain data (for GetHeightAt sampling)
+    std::vector<float> m_heightGrid;
+    int m_heightGridW = 0, m_heightGridH = 0;
+    float m_terrainSizeX = 0.0f, m_terrainSizeZ = 0.0f, m_terrainHeightScale = 0.0f;
     
     void CalculateBounds(const aiScene* scene);
 };

@@ -1,6 +1,8 @@
 #include "Logger.h"
 #include "render/systems/RenderSystem.h"
+#include "render/Camera.h"
 #include "render/FollowCamera.h"
+#include "render/ICameraSource.h"
 #include "render/components/TransformComponent.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MaterialComponent.h"
@@ -32,14 +34,23 @@ static void CheckGLError(const char* location) {
     }
 }
 
-RenderSystem::RenderSystem(Shader* shader, Camera* camera, const glm::mat4& projection)
-    : m_shader(shader), m_camera(camera), m_followCamera(nullptr), m_projection(projection) {
+RenderSystem::RenderSystem(Shader* shader, ICameraSource* cameraSource, const glm::mat4& projection)
+    : m_shader(shader), m_cameraSource(cameraSource), m_projection(projection) {
     SetPriority(100);
 }
 
+RenderSystem::RenderSystem(Shader* shader, Camera* camera, const glm::mat4& projection)
+    : RenderSystem(shader, static_cast<ICameraSource*>(camera), projection) {}
+
 RenderSystem::RenderSystem(Shader* shader, FollowCamera* followCamera, const glm::mat4& projection)
-    : m_shader(shader), m_camera(nullptr), m_followCamera(followCamera), m_projection(projection) {
-    SetPriority(100);
+    : RenderSystem(shader, static_cast<ICameraSource*>(followCamera), projection) {}
+
+void RenderSystem::SetCamera(Camera* camera) {
+    m_cameraSource = camera;
+}
+
+void RenderSystem::SetFollowCamera(FollowCamera* followCamera) {
+    m_cameraSource = followCamera;
 }
 
 void RenderSystem::Initialize(ECS::Registry& registry) {
@@ -58,7 +69,7 @@ void RenderSystem::Initialize(ECS::Registry& registry) {
 // All movement is handled in InputSystem
 // ============================================================================
 void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) {
-    if (!m_shader || (!m_camera && !m_followCamera)) {
+    if (!m_shader || !m_cameraSource) {
         return;
     }
     
@@ -72,15 +83,8 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
     glm::mat4 view;
     glm::vec3 eyePos;
     
-    if (m_followCamera) {
-        // Camera is already updated by InputSystem after character movement
-        // Just calculate the view matrix here - don't update again to avoid lag
-        view = m_followCamera->CalculateViewMatrix();
-        eyePos = m_followCamera->GetCameraPosition();
-    } else {
-        view = m_camera->calculateViewMatrix();
-        eyePos = m_camera->getCameraPosition();
-    }
+    view = m_cameraSource->GetViewMatrix();
+    eyePos = m_cameraSource->GetEyePosition();
     
     GLint uniformModel = m_shader->GetModelLocation();
     GLint uniformView = m_shader->GetViewLocation();
@@ -126,11 +130,9 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
         for (auto e : entities) { entityCount++; }
         LOG_INFO_FMT("RenderSystem", "Found %zu entities to render (first frame)", entityCount);
         
-        if (m_followCamera) {
-            glm::vec3 camPos = m_followCamera->GetCameraPosition();
-            glm::vec3 camTarget = m_followCamera->GetCameraTarget();
-            LOG_INFO_FMT("RenderSystem", "Camera: pos(%.2f, %.2f, %.2f) target(%.2f, %.2f, %.2f)", 
-                camPos.x, camPos.y, camPos.z, camTarget.x, camTarget.y, camTarget.z);
+        if (m_cameraSource) {
+            glm::vec3 camPos = m_cameraSource->GetEyePosition();
+            LOG_INFO_FMT("RenderSystem", "Camera eye(%.2f, %.2f, %.2f)", camPos.x, camPos.y, camPos.z);
         }
         firstFrame = false;
     }

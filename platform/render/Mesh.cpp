@@ -31,7 +31,8 @@ void Mesh::CreateMesh(GLfloat* vertices, unsigned int* indices,
     
     glGenBuffers(1, &VBO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[0]) * numOfVertices, vertices, GL_STATIC_DRAW);
+    // Each vertex: 8 floats (pos xyz, uv, normal xyz)
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[0]) * 8 * numOfVertices, vertices, GL_STATIC_DRAW);
     
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertices[0]) * 8, 0);
     glEnableVertexAttribArray(0);
@@ -64,10 +65,10 @@ void Mesh::CreateMeshWithBones(GLfloat* vertices, unsigned int* indices,
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, IBO);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices[0]) * numOfIndices, indices, GL_STATIC_DRAW);
     
-    // Create vertex buffer (position, UV, normal)
+    // Create vertex buffer (position, UV, normal) - 8 floats per vertex
     glGenBuffers(1, &VBO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[0]) * numOfVertices, vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices[0]) * 8 * numOfVertices, vertices, GL_STATIC_DRAW);
     
     // Vertex attributes (location 0, 1, 2)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(vertices[0]) * 8, 0);
