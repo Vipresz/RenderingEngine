@@ -9,9 +9,13 @@
 #include "render/components/AnimationComponent.h"
 #include "render/Model.h"
 #include "render/Skeleton.h"
+#include "render/passes/OpaqueRenderPass.h"
+#include "render/passes/ShadowRenderPass.h"
+#include "render/passes/TransparentRenderPass.h"
 #include <algorithm>
 #include <GL/glew.h>
 #include <cstring>
+#include <memory>
 
 namespace Engine {
 namespace Platform {
@@ -60,6 +64,12 @@ void RenderSystem::Initialize(ECS::Registry& registry) {
     glDisable(GL_CULL_FACE);
     CreateDefaultShadowMap();
     CreateDefaultWhiteTexture();
+
+    m_pipeline.ClearPasses();
+    m_pipeline.AddPass(std::make_unique<Passes::ShadowRenderPass>());
+    m_pipeline.AddPass(std::make_unique<Passes::OpaqueRenderPass>());
+    m_pipeline.AddPass(std::make_unique<Passes::TransparentRenderPass>());
+
     LOG_INFO("RenderSystem", "Render system initialized");
 }
 
@@ -74,112 +84,17 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
     }
     
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    
-    m_shader->UseShader();
-    if (!m_shader->IsValid()) {
-        return;
-    }
-    
-    glm::mat4 view;
-    glm::vec3 eyePos;
-    
-    view = m_cameraSource->GetViewMatrix();
-    eyePos = m_cameraSource->GetEyePosition();
-    
-    GLint uniformModel = m_shader->GetModelLocation();
-    GLint uniformView = m_shader->GetViewLocation();
-    GLint uniformProjection = m_shader->GetProjectionLocation();
-    GLint uniformEyePosition = m_shader->GetEyePositionLocation();
-    
-    if (uniformView == -1 || uniformProjection == -1) {
-        return;
-    }
-    
-    glUniformMatrix4fv(uniformView, 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(uniformProjection, 1, GL_FALSE, glm::value_ptr(m_projection));
-    if (uniformEyePosition != -1) {
-        glUniform3f(uniformEyePosition, eyePos.x, eyePos.y, eyePos.z);
-    }
-    
-    GLuint shaderProgramID = m_shader->GetShaderID();
-    GLint uniformPointLightCount = glGetUniformLocation(shaderProgramID, "pointLightCount");
-    GLint uniformSpotLightCount = glGetUniformLocation(shaderProgramID, "spotLightCount");
-    GLint uniformDirectionalLightColour = glGetUniformLocation(shaderProgramID, "directionalLight.base.colour");
-    GLint uniformDirectionalLightAmbient = glGetUniformLocation(shaderProgramID, "directionalLight.base.ambientIntensity");
-    GLint uniformDirectionalLightDiffuse = glGetUniformLocation(shaderProgramID, "directionalLight.base.diffuseIntensity");
-    GLint uniformDirectionalLightDirection = glGetUniformLocation(shaderProgramID, "directionalLight.direction");
-    
-    if (uniformPointLightCount != -1) glUniform1i(uniformPointLightCount, 0);
-    if (uniformSpotLightCount != -1) glUniform1i(uniformSpotLightCount, 0);
-    if (uniformDirectionalLightColour != -1) glUniform3f(uniformDirectionalLightColour, 1.0f, 1.0f, 1.0f);
-    if (uniformDirectionalLightAmbient != -1) glUniform1f(uniformDirectionalLightAmbient, 0.3f);
-    if (uniformDirectionalLightDiffuse != -1) glUniform1f(uniformDirectionalLightDiffuse, 0.7f);
-    if (uniformDirectionalLightDirection != -1) glUniform3f(uniformDirectionalLightDirection, 0.0f, -1.0f, -0.5f);
-    
-    m_shader->SetTexture(1);
-    glm::mat4 lightTransform = glm::mat4(1.0f);
-    m_shader->SetDirectionalLightTransform(&lightTransform);
-    BindDefaultShadowMap();
-    BindDefaultWhiteTexture();
-    
-    auto entities = registry.View<Components::MeshComponent, Components::TransformComponent>();
-    
-    static bool firstFrame = true;
-    if (firstFrame) {
-        size_t entityCount = 0;
-        for (auto e : entities) { entityCount++; }
-        LOG_INFO_FMT("RenderSystem", "Found %zu entities to render (first frame)", entityCount);
-        
-        if (m_cameraSource) {
-            glm::vec3 camPos = m_cameraSource->GetEyePosition();
-            LOG_INFO_FMT("RenderSystem", "Camera eye(%.2f, %.2f, %.2f)", camPos.x, camPos.y, camPos.z);
-        }
-        firstFrame = false;
-    }
-    
-    for (auto entityID : entities) {
-        auto* meshComp = registry.GetComponent<Components::MeshComponent>(entityID);
-        auto* transformComp = registry.GetComponent<Components::TransformComponent>(entityID);
-        auto* materialComp = registry.GetComponent<Components::MaterialComponent>(entityID);
-        
-        if (!meshComp || !transformComp || !meshComp->IsLoaded()) {
-            continue;
-        }
-        
-        glm::mat4 modelMatrix = transformComp->GetMatrix();
-        if (uniformModel != -1) {
-            glUniformMatrix4fv(uniformModel, 1, GL_FALSE, glm::value_ptr(modelMatrix));
-        }
-        
-        GLfloat specularIntensity = 0.5f;
-        GLfloat shininess = 32.0f;
-        if (materialComp) {
-            specularIntensity = materialComp->specularIntensity;
-            shininess = materialComp->shininess;
-        }
-        
-        GLint uniformSpecularIntensity = m_shader->GetSpecularIntensityLocation();
-        GLint uniformShininess = m_shader->GetShininessLocation();
-        if (uniformSpecularIntensity != -1) glUniform1f(uniformSpecularIntensity, specularIntensity);
-        if (uniformShininess != -1) glUniform1f(uniformShininess, shininess);
-        
-        // ANIMATIONS DISABLED - Set boneCount to 0 to disable skeletal animation
-        GLint uniformBoneCount = glGetUniformLocation(shaderProgramID, "boneCount");
-        if (uniformBoneCount != -1) {
-            glUniform1i(uniformBoneCount, 0);
-        }
-        
-        if (meshComp->model) {
-            glActiveTexture(GL_TEXTURE1);
-            GLint boundTexture = 0;
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTexture);
-            if (boundTexture == 0 && m_defaultWhiteTexture != 0) {
-                glBindTexture(GL_TEXTURE_2D, m_defaultWhiteTexture);
-            }
-            
-            meshComp->model->RenderModel();
-        }
-    }
+
+    RenderContext context;
+    context.registry = &registry;
+    context.shader = m_shader;
+    context.cameraSource = m_cameraSource;
+    context.projection = m_projection;
+    context.deltaTime = deltaTime;
+    context.tickNumber = tickNumber;
+    context.defaultWhiteTexture = m_defaultWhiteTexture;
+    context.shadowMapTexture = m_defaultShadowMapTexture;
+    m_pipeline.Execute(context);
 }
 
 void RenderSystem::Shutdown(ECS::Registry& registry) {

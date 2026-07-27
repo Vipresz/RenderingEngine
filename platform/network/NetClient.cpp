@@ -1,6 +1,7 @@
 #include "network/NetClient.h"
 
 #include "Logger.h"
+#include "core/network/ReplicationTypes.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -40,10 +41,26 @@ bool NetClient::Connect(const std::string& host, uint16_t port) {
     }
 
     m_connection = std::make_unique<NetworkConnection>(std::move(socket));
+    m_host = host;
     m_running = true;
     m_connected = true;
     m_receiveThread = std::thread([this]() { ReceiveLoop(); });
     LOG_INFO_FMT("NetClient", "Connected to %s:%u", host.c_str(), port);
+    return true;
+}
+
+bool NetClient::ConnectUdp(const std::string& host, uint16_t udpPort) {
+    m_udpPort = udpPort;
+    if (!m_udpChannel.Connect(host, udpPort)) {
+        LOG_WARNING_FMT("NetClient", "UDP connect failed for %s:%u (TCP still active)", host.c_str(), udpPort);
+        return false;
+    }
+
+    m_udpChannel.SetUnreliableTransformHandler([this](const Engine::Net::TransformStatePayload& transform) {
+        if (m_callbacks.onTransformState) {
+            m_callbacks.onTransformState(transform);
+        }
+    });
     return true;
 }
 
@@ -94,6 +111,7 @@ void NetClient::Disconnect() {
 
     m_connection.reset();
     m_incoming.Reset();
+    m_udpChannel.Close();
 }
 
 bool NetClient::SendTransformState(const Engine::Net::TransformStatePayload& payload) {
@@ -102,8 +120,20 @@ bool NetClient::SendTransformState(const Engine::Net::TransformStatePayload& pay
     }
     Engine::Net::TransformStatePayload outgoing = payload;
     outgoing.userId = m_userId;
+    if (m_useUdpForMovement && m_udpChannel.IsOpen()) {
+        return SendUnreliableTransform(outgoing);
+    }
     return SendPacket(Engine::Net::MakeMessage(
         Engine::Net::MessageType::TransformState, outgoing.Serialize(), m_sequence++));
+}
+
+bool NetClient::SendUnreliableTransform(const Engine::Net::TransformStatePayload& payload) {
+    if (!m_loggedIn || !m_udpChannel.IsOpen()) {
+        return false;
+    }
+    Engine::Net::TransformStatePayload outgoing = payload;
+    outgoing.userId = m_userId;
+    return m_udpChannel.SendUnreliableTransform(outgoing);
 }
 
 bool NetClient::SendGenericData(const Engine::Net::GenericDataPayload& payload) {
@@ -116,7 +146,24 @@ bool NetClient::SendGenericData(const Engine::Net::GenericDataPayload& payload) 
         Engine::Net::MessageType::GenericData, outgoing.Serialize(), m_sequence++));
 }
 
+bool NetClient::SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot) {
+    if (!m_loggedIn) {
+        return false;
+    }
+    return SendPacket(Engine::Net::MakeMessage(
+        Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), m_sequence++));
+}
+
+bool NetClient::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot) {
+    if (!m_loggedIn) {
+        return false;
+    }
+    return SendPacket(Engine::Net::MakeMessage(
+        Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++));
+}
+
 void NetClient::Poll() {
+    m_udpChannel.Poll();
     Engine::Net::NetPacket message;
     while (m_incoming.TryPop(message)) {
         HandlePacket(message);
@@ -182,6 +229,30 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (Engine::Net::GenericDataPayload::Deserialize(message.payload, generic) &&
                 m_callbacks.onGenericData) {
                 m_callbacks.onGenericData(generic);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::WorldSnapshot: {
+            Engine::Net::WorldSnapshotPayload snapshot;
+            if (Engine::Net::WorldSnapshotPayload::Deserialize(message.payload, snapshot) &&
+                m_callbacks.onWorldSnapshot) {
+                m_callbacks.onWorldSnapshot(snapshot);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::EntitySnapshot: {
+            Engine::Net::EntitySnapshot snapshot;
+            if (Engine::Net::EntitySnapshot::Deserialize(message.payload, snapshot) &&
+                m_callbacks.onEntitySnapshot) {
+                m_callbacks.onEntitySnapshot(snapshot);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::ComponentSnapshot: {
+            Engine::Net::ComponentSnapshot snapshot;
+            if (Engine::Net::ComponentSnapshot::Deserialize(message.payload, snapshot) &&
+                m_callbacks.onComponentSnapshot) {
+                m_callbacks.onComponentSnapshot(snapshot);
             }
             break;
         }

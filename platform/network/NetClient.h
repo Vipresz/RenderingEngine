@@ -2,8 +2,10 @@
 
 #include "core/network/NetPacket.h"
 #include "core/network/NetworkPayloads.h"
+#include "core/network/ReplicationTypes.h"
 #include "network/MessageQueue.h"
 #include "network/NetworkConnection.h"
+#include "network/UdpChannel.h"
 
 #include <atomic>
 #include <functional>
@@ -23,6 +25,9 @@ struct ClientCallbacks {
     std::function<void(NetUserId)> onPeerLeft;
     std::function<void(const ::Engine::Net::TransformStatePayload&)> onTransformState;
     std::function<void(const ::Engine::Net::GenericDataPayload&)> onGenericData;
+    std::function<void(const ::Engine::Net::WorldSnapshotPayload&)> onWorldSnapshot;
+    std::function<void(const ::Engine::Net::EntitySnapshot&)> onEntitySnapshot;
+    std::function<void(const ::Engine::Net::ComponentSnapshot&)> onComponentSnapshot;
 };
 
 class NetClient {
@@ -31,6 +36,7 @@ public:
     ~NetClient();
 
     bool Connect(const std::string& host, uint16_t port);
+    bool ConnectUdp(const std::string& host, uint16_t udpPort = ::Engine::Net::kDefaultUdpPort);
     bool Login(const std::string& displayName, NetUserId preferredUserId = ::Engine::Net::kInvalidUserId);
     void Disconnect();
 
@@ -41,7 +47,13 @@ public:
     void SetCallbacks(ClientCallbacks callbacks) { m_callbacks = std::move(callbacks); }
 
     bool SendTransformState(const Engine::Net::TransformStatePayload& payload);
+    bool SendUnreliableTransform(const Engine::Net::TransformStatePayload& payload);
     bool SendGenericData(const Engine::Net::GenericDataPayload& payload);
+    bool SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
+    bool SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot);
+
+    void SetUseUdpForMovement(bool enabled) { m_useUdpForMovement = enabled; }
+    bool UsesUdpForMovement() const { return m_useUdpForMovement; }
 
     void Poll();
 
@@ -51,6 +63,7 @@ private:
     bool SendPacket(const NetPacket& message);
 
     std::unique_ptr<NetworkConnection> m_connection;
+    UdpChannel m_udpChannel;
     std::thread m_receiveThread;
     MessageQueue<NetPacket> m_incoming;
     ClientCallbacks m_callbacks;
@@ -60,6 +73,9 @@ private:
     std::atomic<bool> m_loggedIn{false};
     NetUserId m_userId = ::Engine::Net::kInvalidUserId;
     uint64_t m_sequence = 1;
+    bool m_useUdpForMovement = true;
+    std::string m_host;
+    uint16_t m_udpPort = ::Engine::Net::kDefaultUdpPort;
 };
 
 } // namespace Networking

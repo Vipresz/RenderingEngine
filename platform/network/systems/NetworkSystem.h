@@ -5,6 +5,7 @@
 #include "core/ecs/Entity.h"
 #include "core/network/NetTypes.h"
 #include "core/network/NetworkPayloads.h"
+#include "core/network/ReplicationTypes.h"
 #include "network/NetClient.h"
 #include "render/components/TransformComponent.h"
 
@@ -29,6 +30,9 @@ namespace Networking {
 namespace Systems {
 
 using GenericDataHandler = std::function<void(const Engine::Net::GenericDataPayload&)>;
+using WorldSnapshotHandler = std::function<void(const Engine::Net::WorldSnapshotPayload&)>;
+using EntitySnapshotHandler = std::function<void(const Engine::Net::EntitySnapshot&)>;
+using ComponentSnapshotHandler = std::function<void(const Engine::Net::ComponentSnapshot&)>;
 
 // Syncs local player transforms to the server and applies remote player updates.
 class NetworkSystem : public ECS::ISystem {
@@ -38,7 +42,8 @@ public:
     bool ConnectAndLogin(const std::string& host,
                          uint16_t port,
                          const std::string& displayName,
-                         Engine::Net::UserId preferredUserId = Engine::Net::kInvalidUserId);
+                         Engine::Net::UserId preferredUserId = Engine::Net::kInvalidUserId,
+                         uint16_t udpPort = Engine::Net::kDefaultUdpPort);
     void Disconnect();
 
     void SetLocalPlayerEntity(EntityID entity) { m_localPlayerEntity = entity; }
@@ -51,6 +56,15 @@ public:
     const NetClient& GetClient() const { return m_client; }
 
     void SetGenericDataHandler(GenericDataHandler handler) { m_genericDataHandler = std::move(handler); }
+    void SetWorldSnapshotHandler(WorldSnapshotHandler handler) { m_worldSnapshotHandler = std::move(handler); }
+    void SetEntitySnapshotHandler(EntitySnapshotHandler handler) { m_entitySnapshotHandler = std::move(handler); }
+    void SetComponentSnapshotHandler(ComponentSnapshotHandler handler) {
+        m_componentSnapshotHandler = std::move(handler);
+    }
+
+    void SetUseUdpForMovement(bool enabled) { m_client.SetUseUdpForMovement(enabled); }
+    bool SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
+    bool SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot);
 
     // Shared mesh for remote players (e.g. male_model.obj). Scale matches local character.
     void SetRemotePlayerModel(Engine::Platform::Render::Model* model, float scale = 1.0f);
@@ -100,6 +114,9 @@ private:
     std::unordered_map<Engine::Net::UserId, RemotePlaybackState> m_remotePlayback;
     std::vector<Engine::Net::UserId> m_pendingRemovals;
     GenericDataHandler m_genericDataHandler;
+    WorldSnapshotHandler m_worldSnapshotHandler;
+    EntitySnapshotHandler m_entitySnapshotHandler;
+    ComponentSnapshotHandler m_componentSnapshotHandler;
     Engine::Platform::Render::Model* m_remotePlayerModel = nullptr;
     Engine::Platform::Render::Model* m_terrainModel = nullptr;
     float m_remotePlayerScale = 1.0f;

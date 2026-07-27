@@ -139,6 +139,16 @@ if(BUILD_ENGINE_EXAMPLES)
     )
 endif()
 
+# ============================================================================
+# Unit tests
+# ============================================================================
+
+option(BUILD_ENGINE_TESTS "Build RenderingEngine unit tests" ON)
+
+if(BUILD_ENGINE_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ============================================================================
 # Future: Add source files here when creating .cpp implementations

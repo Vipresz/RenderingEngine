@@ -1,0 +1,41 @@
+name: RenderingEngine CI
+
+on:
+  push:
+    branches: [main, master, rgrigorii/menu]
+  pull_request:
+    branches: [main, master, rgrigorii/menu]
+
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure --parallel
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --parallel

@@ -17,15 +17,31 @@ set(PLATFORM_SOURCES
     render/MeshAssetResolve.cpp
     render/Animation.cpp
     render/Skeleton.cpp
+    render/RenderPipeline.cpp
+    render/passes/ShadowRenderPass.cpp
+    render/passes/OpaqueRenderPass.cpp
+    render/passes/TransparentRenderPass.cpp
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
     render/systems/CameraSystem.cpp
     input/InputSystem.cpp
     network/Socket.cpp
+    network/DatagramSocket.cpp
+    network/UdpChannel.cpp
+    network/InterestManager.cpp
+    network/ServerAuthority.cpp
     network/NetworkConnection.cpp
     network/NetClient.cpp
     network/NetServer.cpp
     network/systems/NetworkSystem.cpp
+    network/systems/ReplicationSystem.cpp
+    physics/SimplePhysicsWorld.cpp
+    physics/systems/PhysicsSystem.cpp
+    audio/NullAudioBackend.cpp
+    audio/AudioSystem.cpp
+    ../core/scene/Scene.cpp
+    ../core/scene/Prefab.cpp
+    ../core/scene/SceneSerializer.cpp
 )
 
 # Optional: Nuklear UI (only when NUKLEAR_DIR is set)

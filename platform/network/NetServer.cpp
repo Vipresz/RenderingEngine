@@ -24,7 +24,7 @@ NetServer::~NetServer() {
     Stop();
 }
 
-bool NetServer::Start(const std::string& host, uint16_t port) {
+bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) {
     Stop();
 
     if (!Socket::InitializeNetworking()) {
@@ -41,15 +41,26 @@ bool NetServer::Start(const std::string& host, uint16_t port) {
         return false;
     }
 
+    if (!m_udpChannel.Bind(host, udpPort)) {
+        LOG_WARNING_FMT("NetServer", "UDP bind failed on %s:%u — unreliable movement disabled", host.c_str(), udpPort);
+    } else {
+        m_udpChannel.SetUnreliableTransformHandler([this](const Engine::Net::TransformStatePayload& transform) {
+            HandleUnreliableTransform(transform.userId, transform);
+        });
+    }
+
     m_running = true;
     m_acceptThread = std::thread([this]() { AcceptLoop(); });
-    LOG_INFO_FMT("NetServer", "Listening on %s:%u", host.c_str(), port);
+    LOG_INFO_FMT("NetServer", "Listening TCP %s:%u UDP %s:%u", host.c_str(), port, host.c_str(), udpPort);
     return true;
 }
 
 void NetServer::Stop() {
     m_running = false;
     m_listenSocket.Close();
+    m_udpChannel.Close();
+    m_lastTransforms.clear();
+    m_interestManager = InterestManager();
 
     if (m_acceptThread.joinable()) {
         m_acceptThread.join();
@@ -88,8 +99,21 @@ void NetServer::BroadcastGenericData(const Engine::Net::GenericDataPayload& payl
               excludeUserId);
 }
 
+void NetServer::BroadcastWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot,
+                                       Engine::Net::UserId excludeUserId) {
+    Broadcast(Engine::Net::MakeMessage(
+                  Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++),
+              excludeUserId);
+}
+
+void NetServer::SendWorldSnapshotTo(Engine::Net::UserId userId, const Engine::Net::WorldSnapshotPayload& snapshot) {
+    SendToClient(userId, Engine::Net::MakeMessage(
+                             Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++));
+}
+
 void NetServer::AcceptLoop() {
     while (m_running) {
+        m_udpChannel.Poll();
         Socket clientSocket;
         if (!m_listenSocket.Accept(clientSocket)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -223,9 +247,13 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                 break;
             }
             transform.userId = userId;
-            Broadcast(Engine::Net::MakeMessage(
-                          Engine::Net::MessageType::TransformState, transform.Serialize(), m_sequence++),
-                      userId);
+            HandleUnreliableTransform(userId, transform);
+            break;
+        }
+        case Engine::Net::MessageType::EntitySnapshot:
+        case Engine::Net::MessageType::ComponentSnapshot:
+        case Engine::Net::MessageType::WorldSnapshot: {
+            Broadcast(message, userId);
             break;
         }
         case Engine::Net::MessageType::GenericData: {
@@ -245,6 +273,51 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
         }
         default:
             break;
+    }
+}
+
+void NetServer::HandleUnreliableTransform(Engine::Net::UserId userId,
+                                          const Engine::Net::TransformStatePayload& transform) {
+    Engine::Net::TransformStatePayload last = transform;
+    const auto lastIt = m_lastTransforms.find(userId);
+    if (lastIt != m_lastTransforms.end()) {
+        last = lastIt->second;
+    }
+
+    AuthorityValidationResult validation = m_authority.ValidateTransform(transform, last, 1.0f / 60.0f);
+    Engine::Net::TransformStatePayload authoritative = transform;
+    authoritative.userId = userId;
+    if (!validation.accepted) {
+        authoritative.position = validation.correctedPosition;
+        authoritative.rotationDegrees = validation.correctedRotationDegrees;
+    }
+
+    m_authority.ApplyAuthoritative(userId, authoritative);
+    m_lastTransforms[userId] = authoritative;
+    m_interestManager.UpdateEntity(userId, authoritative.position);
+
+    const Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
+        Engine::Net::MessageType::TransformState, authoritative.Serialize(), m_sequence++);
+    BroadcastToInterested(packet, userId, authoritative.position, userId);
+}
+
+void NetServer::BroadcastToInterested(const Engine::Net::NetPacket& message,
+                                      Engine::Net::UserId sourceUserId,
+                                      const glm::vec3& sourcePosition,
+                                      Engine::Net::UserId excludeUserId) {
+    const std::vector<Engine::Net::UserId> observers =
+        m_interestManager.GetInterestedObservers(sourceUserId, sourcePosition);
+
+    std::lock_guard<std::mutex> lock(m_clientsMutex);
+    for (Engine::Net::UserId observerId : observers) {
+        if (observerId == excludeUserId) {
+            continue;
+        }
+        auto it = m_clients.find(observerId);
+        if (it == m_clients.end() || !it->second || !it->second->connection) {
+            continue;
+        }
+        it->second->connection->SendPacket(message);
     }
 }
 

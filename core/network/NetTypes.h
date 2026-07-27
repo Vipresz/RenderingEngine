@@ -8,6 +8,8 @@ namespace Net {
 constexpr uint32_t kProtocolMagic = 0x41574E57u; // 'AWNW'
 constexpr uint16_t kProtocolVersion = 1;
 constexpr uint16_t kDefaultPort = 7777;
+constexpr uint16_t kDefaultUdpPort = 7778;
+constexpr uint32_t kUdpChannelMagic = 0x41574E55u; // 'AWNU'
 constexpr uint32_t kInvalidUserId = 0;
 
 using UserId = uint32_t;
@@ -24,6 +26,10 @@ enum class MessageType : MessageTypeId {
     GenericData = 10,
     TransformState = 11,
     WorldSnapshot = 12,
+    ComponentSnapshot = 13,
+    EntitySnapshot = 14,
+
+    UnreliableTransform = 40,
 
     PeerJoined = 20,
     PeerLeft = 21,
@@ -40,6 +46,9 @@ inline const char* MessageTypeName(MessageType type) {
         case MessageType::GenericData: return "GenericData";
         case MessageType::TransformState: return "TransformState";
         case MessageType::WorldSnapshot: return "WorldSnapshot";
+        case MessageType::ComponentSnapshot: return "ComponentSnapshot";
+        case MessageType::EntitySnapshot: return "EntitySnapshot";
+        case MessageType::UnreliableTransform: return "UnreliableTransform";
         case MessageType::PeerJoined: return "PeerJoined";
         case MessageType::PeerLeft: return "PeerLeft";
         case MessageType::Ping: return "Ping";

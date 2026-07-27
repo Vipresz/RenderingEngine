@@ -7,6 +7,7 @@
 #include "render/components/MaterialComponent.h"
 #include "render/Shader.h"
 #include "render/ICameraSource.h"
+#include "render/RenderPipeline.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -39,10 +40,14 @@ public:
     void SetCamera(Camera* camera);
     void SetFollowCamera(FollowCamera* followCamera);
     
+    RenderPipeline& GetPipeline() { return m_pipeline; }
+    const RenderPipeline& GetPipeline() const { return m_pipeline; }
+    
 private:
     Shader* m_shader = nullptr;
     ICameraSource* m_cameraSource = nullptr;
     glm::mat4 m_projection;
+    RenderPipeline m_pipeline;
     
     GLuint m_defaultShadowMapTexture = 0;
     GLuint m_defaultWhiteTexture = 0;

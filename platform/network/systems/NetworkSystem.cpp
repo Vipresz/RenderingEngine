@@ -44,16 +44,33 @@ NetworkSystem::NetworkSystem() {
             m_genericDataHandler(payload);
         }
     };
+    callbacks.onWorldSnapshot = [this](const Engine::Net::WorldSnapshotPayload& snapshot) {
+        if (m_worldSnapshotHandler) {
+            m_worldSnapshotHandler(snapshot);
+        }
+    };
+    callbacks.onEntitySnapshot = [this](const Engine::Net::EntitySnapshot& snapshot) {
+        if (m_entitySnapshotHandler) {
+            m_entitySnapshotHandler(snapshot);
+        }
+    };
+    callbacks.onComponentSnapshot = [this](const Engine::Net::ComponentSnapshot& snapshot) {
+        if (m_componentSnapshotHandler) {
+            m_componentSnapshotHandler(snapshot);
+        }
+    };
     m_client.SetCallbacks(std::move(callbacks));
 }
 
 bool NetworkSystem::ConnectAndLogin(const std::string& host,
                                     uint16_t port,
                                     const std::string& displayName,
-                                    Engine::Net::UserId preferredUserId) {
+                                    Engine::Net::UserId preferredUserId,
+                                    uint16_t udpPort) {
     if (!m_client.Connect(host, port)) {
         return false;
     }
+    m_client.ConnectUdp(host, udpPort);
     return m_client.Login(displayName, preferredUserId);
 }
 
@@ -104,6 +121,14 @@ void NetworkSystem::SetSendRateHz(float hz) {
     }
     m_greedySend = false;
     m_sendIntervalSeconds = 1.0f / hz;
+}
+
+bool NetworkSystem::SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot) {
+    return m_client.SendEntitySnapshot(snapshot);
+}
+
+bool NetworkSystem::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot) {
+    return m_client.SendWorldSnapshot(snapshot);
 }
 
 void NetworkSystem::Shutdown(ECS::Registry& registry) {
