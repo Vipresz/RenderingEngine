@@ -17,6 +17,7 @@ constexpr NativeSocket kInvalidNativeSocket = INVALID_SOCKET;
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 using NativeSocket = int;
