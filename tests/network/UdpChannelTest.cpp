@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "network/UdpChannel.h"
+#include "TestPort.h"
 
 #include <atomic>
 #include <chrono>
@@ -15,8 +16,9 @@ TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     UdpChannel server;
     UdpChannel client;
 
-    ASSERT_TRUE(server.Bind("127.0.0.1", 19000));
-    ASSERT_TRUE(client.Connect("127.0.0.1", 19000));
+    const uint16_t port = Engine::Tests::AllocateEphemeralTestPort(0);
+    ASSERT_TRUE(server.Bind("127.0.0.1", port));
+    ASSERT_TRUE(client.Connect("127.0.0.1", port));
 
     std::atomic<bool> received{false};
     TransformStatePayload receivedPayload;
@@ -48,8 +50,9 @@ TEST(UdpChannelTest, LoopbackSessionRegister) {
     UdpChannel server;
     UdpChannel client;
 
-    ASSERT_TRUE(server.Bind("127.0.0.1", 19001));
-    ASSERT_TRUE(client.Connect("127.0.0.1", 19001));
+    const uint16_t port = Engine::Tests::AllocateEphemeralTestPort(1);
+    ASSERT_TRUE(server.Bind("127.0.0.1", port));
+    ASSERT_TRUE(client.Connect("127.0.0.1", port));
 
     std::atomic<bool> received{false};
     UdpSessionRegisterPayload receivedPayload;

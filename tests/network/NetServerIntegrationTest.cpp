@@ -3,6 +3,7 @@
 #include "network/NetClient.h"
 #include "network/NetServer.h"
 #include "network/UdpChannel.h"
+#include "TestPort.h"
 
 #include <atomic>
 #include <chrono>
@@ -30,16 +31,6 @@ namespace {
 
 constexpr const char* kHost = "127.0.0.1";
 
-// Process-unique base so parallel ctest/game_server instances don't collide on UDP bind.
-uint16_t TestPortBase() {
-#if defined(_WIN32)
-    const uint32_t pid = static_cast<uint32_t>(::GetCurrentProcessId());
-#else
-    const uint32_t pid = static_cast<uint32_t>(::getpid());
-#endif
-    return static_cast<uint16_t>(22000 + (pid % 800) * 40);
-}
-
 bool WaitUntil(const std::function<bool()>& predicate, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -60,7 +51,7 @@ protected:
     uint16_t udpPort = 0;
 
     void SetUp() override {
-        tcpPort = TestPortBase();
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(0);
         udpPort = static_cast<uint16_t>(tcpPort + 1);
         ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
         ASSERT_TRUE(server.IsUdpBound());
@@ -206,7 +197,7 @@ protected:
     uint16_t udpPort = 0;
 
     void SetUp() override {
-        tcpPort = static_cast<uint16_t>(TestPortBase() + 10);
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(10);
         udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.SetRequiredAuthToken("integration-secret");
         ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
@@ -224,7 +215,7 @@ protected:
     uint16_t udpPort = 0;
 
     void SetUp() override {
-        tcpPort = static_cast<uint16_t>(TestPortBase() + 20);
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(20);
         udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.GetCredentialStore().SetRequireCredentials(true);
         ASSERT_TRUE(server.GetCredentialStore().RegisterUser("alice", "secret123"));
@@ -275,7 +266,7 @@ protected:
     uint16_t udpPort = 0;
 
     void SetUp() override {
-        tcpPort = static_cast<uint16_t>(TestPortBase() + 30);
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(30);
         udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.SetAuthoritativeMode(true);
         ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));

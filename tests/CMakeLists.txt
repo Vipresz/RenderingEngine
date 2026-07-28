@@ -82,6 +82,7 @@ set(ENGINE_TEST_SOURCES
 )
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})
+target_include_directories(EngineTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(EngineTests PRIVATE EngineTestSupport GTest::gtest_main)
 target_compile_features(EngineTests PRIVATE cxx_std_17)
 set_target_properties(EngineTests PROPERTIES

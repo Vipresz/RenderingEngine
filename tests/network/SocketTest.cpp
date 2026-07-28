@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "network/Socket.h"
+#include "TestPort.h"
 
 #include <array>
 #include <atomic>
@@ -21,7 +22,7 @@ public:
 const auto* kSocketNetworkingEnv =
     ::testing::AddGlobalTestEnvironment(new SocketNetworkingEnvironment());
 
-constexpr uint16_t kLoopbackPort = 19102;
+const uint16_t kLoopbackPort = Engine::Tests::AllocateEphemeralTestPort(100);
 
 } // namespace
 
