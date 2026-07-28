@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, master, rgrigorii/menu]
 
+concurrency:
+  group: rendering-engine-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-windows:
     runs-on: windows-latest
