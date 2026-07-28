@@ -1,0 +1,44 @@
+# Local and CI build trees
+build/
+build-*/
+bin/
+lib/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+*.dir/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+# Coverage / profiling temp
+LastCoverageResults.log
+coverage.xml
+*.coverage
+*.gcno
+*.gcda
+
+# IDE and OS
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
