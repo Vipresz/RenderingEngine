@@ -132,6 +132,7 @@ std::string ExtractJsonObject(const std::string& json, const std::string& key) {
 void ApplyShardJson(const std::string& shardJson, ShardConfig& shard) {
     ReadJsonUInt(shardJson, "shardId", shard.shardId);
     ReadJsonUInt(shardJson, "maxPlayers", shard.maxPlayers);
+    ReadJsonUInt(shardJson, "overflowShardId", shard.overflowShardId);
     ReadJsonString(shardJson, "redirectHost", shard.redirectHost);
     ReadJsonUInt16(shardJson, "redirectTcpPort", shard.redirectTcpPort);
     ReadJsonUInt16(shardJson, "redirectUdpPort", shard.redirectUdpPort);
@@ -148,6 +149,8 @@ void ApplyScalePolicyJson(const std::string& policyJson, ScalePolicyConfig& poli
     ReadJsonUInt(policyJson, "shardSplitThreshold", policy.shardSplitThreshold);
     ReadJsonFloat(policyJson, "shardTickMsSoftLimit", policy.shardTickMsSoftLimit);
     ReadJsonFloat(policyJson, "shardTickMsHardLimit", policy.shardTickMsHardLimit);
+    ReadJsonUInt(policyJson, "layerMinShardPlayers", policy.layerMinShardPlayers);
+    ReadJsonUInt(policyJson, "layerSplitSeedPlayers", policy.layerSplitSeedPlayers);
     ReadJsonUInt(policyJson, "cellLayerDensityThreshold", policy.cellLayerDensityThreshold);
     ReadJsonFloat(policyJson, "densityCellSize", policy.densityCellSize);
     ReadJsonFloat(policyJson, "layerFullRadius", policy.layerFullRadius);

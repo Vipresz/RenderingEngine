@@ -1,19 +1,22 @@
 {
   "zoneId": "capital_plaza",
   "shard": {
-    "shardId": 2,
+    "shardId": 1,
+    "overflowShardId": 2,
     "maxPlayers": 256,
     "redirectHost": "127.0.0.1",
-    "redirectTcpPort": 17879,
-    "redirectUdpPort": 17880
+    "redirectTcpPort": 17877,
+    "redirectUdpPort": 17878
   },
   "scalePolicy": {
     "overflowPolicy": "LayerFirst",
-    "shardSoftCap": 180,
+    "shardSoftCap": 256,
     "shardHardCap": 256,
-    "shardSplitThreshold": 200,
+    "shardSplitThreshold": 256,
     "shardTickMsSoftLimit": 12.0,
     "shardTickMsHardLimit": 16.0,
+    "layerMinShardPlayers": 256,
+    "layerSplitSeedPlayers": 128,
     "cellLayerDensityThreshold": 40,
     "densityCellSize": 32.0,
     "layerFullRadius": 20.0,

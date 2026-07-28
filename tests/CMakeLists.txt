@@ -32,6 +32,7 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/UdpMessageAuth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CredentialStore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ScalePolicyConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/LayerInstancePolicy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ReplicationTier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ZoneScaleConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
@@ -90,6 +91,7 @@ set(ENGINE_TEST_SOURCES
     core/AuthorityHardeningTest.cpp
     core/ReplicationTierTest.cpp
     core/ScalePolicyTest.cpp
+    core/LayerInstancePolicyTest.cpp
     core/ZoneScaleConfigTest.cpp
     terrain/HeightmapTerrainTest.cpp
     physics/SimplePhysicsWorldTest.cpp

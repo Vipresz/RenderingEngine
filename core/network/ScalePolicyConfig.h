@@ -22,6 +22,8 @@ struct ScalePolicyConfig {
     float shardTickMsHardLimit = 16.0f;
 
     // Layering (local density within one game_server).
+    uint32_t layerMinShardPlayers = 256;
+    uint32_t layerSplitSeedPlayers = 128;
     uint32_t cellLayerDensityThreshold = 32;
     float densityCellSize = 32.0f;
     float layerFullRadius = 24.0f;
@@ -42,7 +44,7 @@ struct ScalePolicyConfig {
     OverflowPolicy overflowPolicy = OverflowPolicy::LayerThenShard;
 
     bool ShouldRedirectLogin(uint32_t connectedPlayers, float tickP95Ms) const;
-    bool IsLayeringActive(uint32_t cellDensity) const;
+    bool IsLayeringActive(uint32_t connectedPlayers, uint32_t cellDensity) const;
 };
 
 } // namespace Net

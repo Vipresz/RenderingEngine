@@ -10,9 +10,14 @@ namespace Net {
 struct ShardConfig {
     uint32_t shardId = 0;
     uint32_t maxPlayers = 128;
+    uint32_t overflowShardId = 0;
     std::string redirectHost;
     uint16_t redirectTcpPort = 0;
     uint16_t redirectUdpPort = 0;
+
+    bool HasOverflowTarget() const {
+        return !redirectHost.empty() && redirectTcpPort != 0;
+    }
 };
 
 } // namespace Net

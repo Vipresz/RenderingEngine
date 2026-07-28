@@ -5,12 +5,14 @@
 using Engine::Net::OverflowPolicy;
 using Engine::Net::ScalePolicyConfig;
 
-TEST(ScalePolicyTest, LayeringActivatesAtThreshold) {
+TEST(ScalePolicyTest, LayeringActivatesAtThresholdWhenShardIsLargeEnough) {
     ScalePolicyConfig policy;
+    policy.layerMinShardPlayers = 256;
     policy.cellLayerDensityThreshold = 32;
 
-    EXPECT_FALSE(policy.IsLayeringActive(31));
-    EXPECT_TRUE(policy.IsLayeringActive(32));
+    EXPECT_FALSE(policy.IsLayeringActive(255, 40));
+    EXPECT_FALSE(policy.IsLayeringActive(256, 31));
+    EXPECT_TRUE(policy.IsLayeringActive(256, 32));
 }
 
 TEST(ScalePolicyTest, LayerThenShardWaitsForTickPressureAtSoftCap) {

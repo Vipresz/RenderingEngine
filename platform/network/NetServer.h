@@ -6,6 +6,7 @@
 #include "core/network/CredentialStore.h"
 #include "core/network/MovementCommand.h"
 #include "core/network/ShardConfig.h"
+#include "core/network/LayerInstancePolicy.h"
 #include "core/network/ScalePolicyConfig.h"
 #include "core/network/ReplicationTier.h"
 #include "core/network/ZoneScaleConfig.h"
@@ -132,6 +133,11 @@ public:
     void SetLoginRateLimit(float loginsPerSecond, float burstCapacity);
     uint32_t ConsumeLoginAttemptsDropped();
 
+    void SetOverflowLayerPopulation(uint32_t playerCount);
+    uint32_t GetOverflowLayerPopulation() const;
+    Engine::Net::LayerSplitPlan GetLayerSplitPlan() const;
+    bool TryExecuteLayerSplit(const std::function<void(Engine::Net::UserId)>& onPlayerMigrated);
+
 private:
     void IoLoop();
     size_t PollClients();
@@ -147,6 +153,7 @@ private:
     void ClearUdpEndpointUnlocked(Engine::Net::UserId userId);
     bool IsShardAtCapacity() const;
     void FillRedirectResponse(Engine::Net::LoginResponsePayload& response) const;
+    void SendLayerMigrationRedirect(Engine::Net::UserId userId);
 
     bool SendToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
     bool SendUdpTransformTo(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
@@ -205,6 +212,7 @@ private:
     RateLimiter m_loginRateLimiter{100.0f, 200.0f};
     std::atomic<uint32_t> m_movementCommandsDropped{0};
     std::atomic<uint32_t> m_loginAttemptsDropped{0};
+    std::atomic<uint32_t> m_overflowLayerPopulation{0};
 
     mutable std::mutex m_replicationQueueMutex;
     std::deque<PendingPeerTransform> m_pendingPeerTransforms;

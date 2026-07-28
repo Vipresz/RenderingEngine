@@ -18,6 +18,7 @@
 
 #include "TestHelpers.h"
 #include "TestPort.h"
+#include "core/network/JoinAdmission.h"
 #include "core/network/MovementCommand.h"
 #include "core/network/NetworkPayloads.h"
 #include "core/network/ShardConfig.h"
@@ -219,7 +220,11 @@ struct JoinLoadScenarioResult {
     bool passed = false;
 };
 
-JoinResult JoinPlayer(uint16_t tcpPort, int playerIndex, std::atomic<bool>& startGate, int joinRetryCount);
+JoinResult JoinPlayer(uint16_t tcpPort,
+                      int playerIndex,
+                      int playerCount,
+                      std::atomic<bool>& startGate,
+                      int joinRetryCount);
 bool RegisterClientUdp(NetClient& client, uint16_t udpPort, NetServer& server);
 bool WaitForAllPlayersSpawned(const NetServer& server,
                               const std::vector<std::unique_ptr<NetClient>>& clients,
@@ -332,7 +337,7 @@ protected:
         for (int playerIndex = 0; playerIndex < playerCount; ++playerIndex) {
             workers.emplace_back([&, playerIndex]() {
                 workersReady.fetch_add(1, std::memory_order_relaxed);
-                JoinResult result = JoinPlayer(tcpPort, playerIndex, startGate, joinRetryCountLocal);
+                JoinResult result = JoinPlayer(tcpPort, playerIndex, playerCount, startGate, joinRetryCountLocal);
                 {
                     std::lock_guard<std::mutex> lock(resultsMutex);
                     results[static_cast<size_t>(playerIndex)] = std::move(result);
@@ -556,7 +561,11 @@ private:
     std::thread tickThread;
 };
 
-JoinResult JoinPlayer(uint16_t tcpPort, int playerIndex, std::atomic<bool>& startGate, int joinRetryCount) {
+JoinResult JoinPlayer(uint16_t tcpPort,
+                      int playerIndex,
+                      int playerCount,
+                      std::atomic<bool>& startGate,
+                      int joinRetryCount) {
     JoinResult result;
     const auto waitStart = std::chrono::steady_clock::now();
     while (!startGate.load(std::memory_order_acquire)) {
@@ -566,6 +575,8 @@ JoinResult JoinPlayer(uint16_t tcpPort, int playerIndex, std::atomic<bool>& star
         }
         std::this_thread::yield();
     }
+
+    Engine::Net::SleepJoinStagger(playerIndex, playerCount);
 
     const auto totalStart = std::chrono::steady_clock::now();
     const std::string displayName = "load_player_" + std::to_string(playerIndex);

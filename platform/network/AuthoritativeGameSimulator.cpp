@@ -114,6 +114,8 @@ bool AuthoritativeGameSimulator::HandleGenericData(Engine::Net::UserId userId,
 
 bool AuthoritativeGameSimulator::HandleMovementCommand(Engine::Net::UserId userId,
                                                      Engine::Net::MovementCommand& command) {
+    // Ack immediately on receipt so movement RTT is not queued behind tick drain work.
+    m_server.SendMovementAck(userId, command.tick);
     std::lock_guard<std::mutex> lock(m_queueMutex);
     m_pendingCommands.push_back(PendingCommand{userId, command});
     return true;
@@ -158,7 +160,6 @@ void AuthoritativeGameSimulator::DrainQueues() {
 
         Engine::Net::TransformStatePayload payload =
             BuildTransformPayload(entry.userId, playerIt->second, entry.command.tick);
-        m_server.SendMovementAck(entry.userId, entry.command.tick);
         m_server.StoreAuthoritativeTransform(entry.userId, payload);
         m_server.EnqueueSelfTransform(entry.userId, payload);
         peerEnqueuePayloads.push_back(payload);
@@ -376,6 +377,14 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
 
     RefreshScalePolicy();
 
+    const Engine::Net::LayerSplitPlan splitPlan = m_server.GetLayerSplitPlan();
+    m_lastTickMetrics.shardRedirectRecommended = splitPlan.shouldSplit;
+    if (splitPlan.shouldSplit && m_server.GetShardConfig().HasOverflowTarget()) {
+        m_server.TryExecuteLayerSplit([this](Engine::Net::UserId userId) {
+            OnClientDisconnected(userId);
+        });
+    }
+
     m_sessionMetrics.connectedPlayers = m_lastTickMetrics.connectedPlayers;
     m_sessionMetrics.movementCommandsProcessed += m_tickMovementCommandsProcessed;
     m_sessionMetrics.dirtySnapshotsSent += m_tickDirtySnapshotsSent;
@@ -423,7 +432,8 @@ float AuthoritativeGameSimulator::ComputeP95(const std::deque<float>& samples) {
 void AuthoritativeGameSimulator::RefreshScalePolicy() {
     const Engine::Net::ScalePolicyConfig& policy = m_server.GetScalePolicyConfig();
     const uint32_t cellDensity = m_server.GetInterestManager().GetMaxCellDensity();
-    const bool layeringActive = policy.IsLayeringActive(cellDensity);
+    const uint32_t players = static_cast<uint32_t>(m_players.size());
+    const bool layeringActive = policy.IsLayeringActive(players, cellDensity);
     m_server.ApplyLayeringState(layeringActive);
 
     m_tickMsHistory.push_back(m_lastTickMetrics.tickMs);
@@ -444,11 +454,11 @@ void AuthoritativeGameSimulator::RefreshScalePolicy() {
     }
     m_snapshotIntervalSeconds = snapshotInterval;
 
-    const uint32_t players = static_cast<uint32_t>(m_players.size());
     m_lastTickMetrics.tickP95Ms = tickP95Ms;
     m_lastTickMetrics.cellDensityMax = cellDensity;
     m_lastTickMetrics.layeringActive = layeringActive;
-    m_lastTickMetrics.shardRedirectRecommended = policy.ShouldRedirectLogin(players, tickP95Ms);
+    m_lastTickMetrics.shardRedirectRecommended =
+        Engine::Net::PlanLayerSplit(players, policy).shouldSplit;
 }
 
 void AuthoritativeGameSimulator::NotifyInterestedPeersOfSpawn(

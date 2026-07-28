@@ -41,9 +41,13 @@ set(PLATFORM_SOURCES
     network/systems/NetworkSystem.cpp
     network/systems/ReplicationSystem.cpp
     ../core/network/CharacterMovementSimulator.cpp
+    ../core/network/CryptoSha256.cpp
+    ../core/network/SecureCompare.cpp
+    ../core/network/UdpMessageAuth.cpp
     ../core/network/PasswordHasher.cpp
     ../core/network/CredentialStore.cpp
     ../core/network/ScalePolicyConfig.cpp
+    ../core/network/LayerInstancePolicy.cpp
     ../core/network/ReplicationTier.cpp
     ../core/network/ZoneScaleConfig.cpp
     ../core/terrain/HeightmapTerrain.cpp

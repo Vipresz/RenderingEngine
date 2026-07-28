@@ -47,6 +47,7 @@ Engine::Net::ZoneScaleConfig MakeLayeringStressConfig() {
     config.scalePolicy.overflowPolicy = Engine::Net::OverflowPolicy::LayerThenShard;
     config.scalePolicy.shardSoftCap = 64;
     config.scalePolicy.shardHardCap = 64;
+    config.scalePolicy.layerMinShardPlayers = 8;
     config.scalePolicy.cellLayerDensityThreshold = 4;
     return config;
 }

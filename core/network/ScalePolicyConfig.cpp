@@ -27,7 +27,10 @@ bool ScalePolicyConfig::ShouldRedirectLogin(uint32_t connectedPlayers, float tic
     }
 }
 
-bool ScalePolicyConfig::IsLayeringActive(uint32_t cellDensity) const {
+bool ScalePolicyConfig::IsLayeringActive(uint32_t connectedPlayers, uint32_t cellDensity) const {
+    if (layerMinShardPlayers > 0 && connectedPlayers < layerMinShardPlayers) {
+        return false;
+    }
     return cellLayerDensityThreshold > 0 && cellDensity >= cellLayerDensityThreshold;
 }
 

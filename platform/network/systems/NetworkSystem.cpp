@@ -13,6 +13,8 @@
 
 #include <glm/glm.hpp>
 #include <cmath>
+#include <chrono>
+#include <thread>
 
 using EngineLogging::Logger;
 using Engine::Platform::Render::Components::MaterialComponent;
@@ -105,13 +107,15 @@ NetworkSystem::NetworkSystem() {
         }
     };
     callbacks.onEntitySnapshot = [this](const Engine::Net::EntitySnapshot& snapshot) {
-        if (m_entitySnapshotHandler) {
-            m_entitySnapshotHandler(snapshot);
-        }
+        m_pendingEntitySnapshots.push_back(snapshot);
     };
     callbacks.onComponentSnapshot = [this](const Engine::Net::ComponentSnapshot& snapshot) {
-        if (m_componentSnapshotHandler) {
-            m_componentSnapshotHandler(snapshot);
+        m_pendingComponentSnapshots.push_back(snapshot);
+    };
+    callbacks.onMovementAck = [this](const Engine::Net::MovementAckPayload& ack) {
+        if (m_pendingMovementAckSignal != nullptr && ack.tick == m_pendingMovementAckTick &&
+            ack.userId == m_client.GetUserId()) {
+            m_pendingMovementAckSignal->store(true, std::memory_order_release);
         }
     };
     m_client.SetCallbacks(std::move(callbacks));
@@ -138,6 +142,8 @@ void NetworkSystem::Disconnect() {
     m_pendingTransforms.clear();
     m_remotePlayback.clear();
     m_peerDisplayNames.clear();
+    m_pendingEntitySnapshots.clear();
+    m_pendingComponentSnapshots.clear();
     m_lastSentCommandTick = 0;
     m_lastAcknowledgedTick = 0;
 }
@@ -548,8 +554,36 @@ void NetworkSystem::InterpolateRemoteTransforms(float deltaTime, ECS::Registry& 
     }
 }
 
-void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) {
+void NetworkSystem::FlushDeferredSnapshots() {
+    if (m_entitySnapshotHandler) {
+        for (const Engine::Net::EntitySnapshot& snapshot : m_pendingEntitySnapshots) {
+            m_entitySnapshotHandler(snapshot);
+        }
+    }
+    m_pendingEntitySnapshots.clear();
+
+    if (m_componentSnapshotHandler) {
+        for (const Engine::Net::ComponentSnapshot& snapshot : m_pendingComponentSnapshots) {
+            m_componentSnapshotHandler(snapshot);
+        }
+    }
+    m_pendingComponentSnapshots.clear();
+}
+
+void NetworkSystem::PollNetwork() {
     m_client.Poll();
+}
+
+void NetworkSystem::StageEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot) {
+    m_pendingEntitySnapshots.push_back(snapshot);
+}
+
+void NetworkSystem::StageComponentSnapshot(const Engine::Net::ComponentSnapshot& snapshot) {
+    m_pendingComponentSnapshots.push_back(snapshot);
+}
+
+void NetworkSystem::ProcessNetworkFrame(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) {
+    FlushDeferredSnapshots();
 
     for (Engine::Net::UserId userId : m_pendingRemovals) {
         RemoveRemoteEntity(userId, registry);
@@ -594,6 +628,45 @@ void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t ti
             SendLocalTransform(registry, tickNumber);
         }
     }
+}
+
+void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) {
+    PollNetwork();
+    ProcessNetworkFrame(deltaTime, registry, tickNumber);
+}
+
+void NetworkSystem::ArmMovementAckWait(uint64_t commandTick, std::atomic<bool>* signal) {
+    m_pendingMovementAckTick = commandTick;
+    m_pendingMovementAckSignal = signal;
+    if (signal != nullptr) {
+        signal->store(false, std::memory_order_release);
+    }
+}
+
+void NetworkSystem::DisarmMovementAckWait() {
+    m_pendingMovementAckSignal = nullptr;
+    m_pendingMovementAckTick = 0;
+}
+
+bool NetworkSystem::PollUntilMovementAck(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (m_pendingMovementAckSignal == nullptr ||
+           !m_pendingMovementAckSignal->load(std::memory_order_acquire)) {
+        PollNetwork();
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::yield();
+    }
+    return true;
+}
+
+bool NetworkSystem::WaitForMovementAck(uint64_t commandTick, std::chrono::milliseconds timeout) {
+    std::atomic<bool> received{false};
+    ArmMovementAckWait(commandTick, &received);
+    const bool acked = PollUntilMovementAck(timeout);
+    DisarmMovementAckWait();
+    return acked;
 }
 
 } // namespace Systems

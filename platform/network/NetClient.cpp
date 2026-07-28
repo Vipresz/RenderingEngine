@@ -82,40 +82,71 @@ bool NetClient::Login(const std::string& displayName,
                       Engine::Net::UserId preferredUserId,
                       const std::string& username,
                       const std::string& password) {
-    if (!m_connected || !m_connection) {
-        return false;
-    }
-
-    m_loginRejected = false;
-
-    Engine::Net::LoginRequestPayload request;
-    request.displayName = displayName;
-    request.preferredUserId = preferredUserId;
-    request.username = username.empty() ? m_username : username;
-    request.password = password.empty() ? m_password : password;
-    request.authToken = m_authToken;
-    const Engine::Net::NetPacket message =
-        Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
-
-    if (!SendPacket(message)) {
-        return false;
-    }
-
-    const auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
-        Poll();
-        if (m_loggedIn) {
-            LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
-            return true;
-        }
-        if (m_loginRejected) {
-            LOG_ERROR("NetClient", "Login rejected by server");
+    constexpr int kMaxRedirectHops = 2;
+    for (int redirectHop = 0; redirectHop <= kMaxRedirectHops; ++redirectHop) {
+        if (!m_connected || !m_connection) {
             return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+        m_loginRejected = false;
+        m_loginRedirectPending = false;
+        m_lastLoginDisplayName = displayName;
+
+        Engine::Net::LoginRequestPayload request;
+        request.displayName = displayName;
+        request.preferredUserId = preferredUserId;
+        request.username = username.empty() ? m_username : username;
+        request.password = password.empty() ? m_password : password;
+        request.authToken = m_authToken;
+        const Engine::Net::NetPacket message =
+            Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
+
+        if (!SendPacket(message)) {
+            return false;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+            Poll();
+            if (m_loggedIn) {
+                LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
+                return true;
+            }
+            if (m_loginRedirectPending) {
+                break;
+            }
+            if (m_loginRejected) {
+                LOG_ERROR("NetClient", "Login rejected by server");
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (!m_loginRedirectPending) {
+            LOG_ERROR("NetClient", "Login timed out");
+            return false;
+        }
+
+        const std::string redirectHost = m_pendingRedirectHost;
+        const uint16_t redirectTcpPort = m_pendingRedirectTcpPort;
+        const uint16_t redirectUdpPort = m_pendingRedirectUdpPort;
+        m_loginRedirectPending = false;
+        m_pendingRedirectHost.clear();
+        m_pendingRedirectTcpPort = 0;
+        m_pendingRedirectUdpPort = 0;
+
+        Disconnect();
+        if (!Connect(redirectHost, redirectTcpPort)) {
+            LOG_ERROR_FMT("NetClient", "Failed to follow login redirect to %s:%u",
+                          redirectHost.c_str(),
+                          redirectTcpPort);
+            return false;
+        }
+        m_udpPort = redirectUdpPort != 0 ? redirectUdpPort
+                                         : static_cast<uint16_t>(redirectTcpPort + 1);
     }
 
-    LOG_ERROR("NetClient", "Login timed out");
+    LOG_ERROR("NetClient", "Login redirect hop limit exceeded");
     return false;
 }
 
@@ -260,6 +291,16 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
                 m_userId = response.assignedUserId;
                 m_udpSessionToken = response.udpSessionToken;
                 m_udpChannel.SetSessionToken(m_udpSessionToken);
+            } else if (response.redirect && !response.redirectHost.empty() && response.redirectTcpPort != 0) {
+                m_pendingRedirectHost = response.redirectHost;
+                m_pendingRedirectTcpPort = response.redirectTcpPort;
+                m_pendingRedirectUdpPort = response.redirectUdpPort;
+                m_loginRedirectPending = true;
+                LOG_INFO_FMT("NetClient",
+                             "Login redirect to shard %u at %s:%u",
+                             response.shardId,
+                             response.redirectHost.c_str(),
+                             response.redirectTcpPort);
             } else {
                 m_loginRejected = true;
                 LOG_ERROR_FMT("NetClient", "Login failed: %s", response.message.c_str());

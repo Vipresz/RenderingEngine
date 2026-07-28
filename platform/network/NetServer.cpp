@@ -507,7 +507,8 @@ size_t NetServer::FlushPendingPeerTransforms(size_t maxSends) {
     {
         std::lock_guard<std::mutex> lock(m_worldMutex);
         const uint32_t cellDensity = m_interestManager.GetMaxCellDensity();
-        layeringActive = m_scalePolicy.IsLayeringActive(cellDensity);
+        const uint32_t connectedPlayers = static_cast<uint32_t>(GetLoggedInClientCount());
+        layeringActive = m_scalePolicy.IsLayeringActive(connectedPlayers, cellDensity);
         radii = Engine::Net::ComputeEffectiveRadii(m_scalePolicy, layeringActive);
     }
 
@@ -959,16 +960,42 @@ void NetServer::ApplyLayeringState(bool layeringActive) {
     const size_t observerCap = layeringActive ? m_scalePolicy.observersCapCrowded
                                              : m_scalePolicy.observersCapNormal;
     m_interestManager.SetMaxObserversPerBroadcast(observerCap);
+    if (layeringActive) {
+        m_interestManager.SetDefaultInterestRadius(m_scalePolicy.layerMidRadius);
+    } else if (m_scalePolicy.layerFarRadius > 0.0f) {
+        m_interestManager.SetDefaultInterestRadius(m_scalePolicy.layerFarRadius);
+    }
 }
 
 bool NetServer::IsShardAtCapacity() const {
 
     const uint32_t players = static_cast<uint32_t>(GetLoggedInClientCount());
-    return m_scalePolicy.ShouldRedirectLogin(players, m_observedTickP95Ms);
+    const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
+    const auto admission = Engine::Net::EvaluateLayerLoginAdmission(
+        players,
+        overflowPlayers,
+        m_shardConfig.HasOverflowTarget(),
+        m_scalePolicy);
+    return admission == Engine::Net::LayerLoginAdmission::RedirectOverflow ||
+           admission == Engine::Net::LayerLoginAdmission::SplitPending ||
+           admission == Engine::Net::LayerLoginAdmission::RejectFull;
 
 }
 
 
+
+void NetServer::SetOverflowLayerPopulation(uint32_t playerCount) {
+    m_overflowLayerPopulation.store(playerCount, std::memory_order_relaxed);
+}
+
+uint32_t NetServer::GetOverflowLayerPopulation() const {
+    return m_overflowLayerPopulation.load(std::memory_order_relaxed);
+}
+
+Engine::Net::LayerSplitPlan NetServer::GetLayerSplitPlan() const {
+    const uint32_t players = static_cast<uint32_t>(GetLoggedInClientCount());
+    return Engine::Net::PlanLayerSplit(players, m_scalePolicy);
+}
 
 void NetServer::FillRedirectResponse(Engine::Net::LoginResponsePayload& response) const {
 
@@ -976,7 +1003,8 @@ void NetServer::FillRedirectResponse(Engine::Net::LoginResponsePayload& response
 
     response.redirect = true;
 
-    response.shardId = m_shardConfig.shardId;
+    response.shardId = m_shardConfig.overflowShardId != 0 ? m_shardConfig.overflowShardId
+                                                          : m_shardConfig.shardId;
 
     response.redirectHost = m_shardConfig.redirectHost;
 
@@ -986,6 +1014,74 @@ void NetServer::FillRedirectResponse(Engine::Net::LoginResponsePayload& response
 
     response.message = "shard_full";
 
+}
+
+void NetServer::SendLayerMigrationRedirect(Engine::Net::UserId userId) {
+    Engine::Net::LoginResponsePayload response;
+    response.assignedUserId = userId;
+    FillRedirectResponse(response);
+    response.message = "layer_split";
+    SendToClient(userId, Engine::Net::MakeMessage(
+                             Engine::Net::MessageType::LoginResponse,
+                             response.Serialize(),
+                             m_sequence++));
+}
+
+bool NetServer::TryExecuteLayerSplit(const std::function<void(Engine::Net::UserId)>& onPlayerMigrated) {
+    if (!m_shardConfig.HasOverflowTarget()) {
+        return false;
+    }
+
+    const uint32_t localPlayers = static_cast<uint32_t>(GetLoggedInClientCount());
+    const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
+    const auto admission = Engine::Net::EvaluateLayerLoginAdmission(
+        localPlayers,
+        overflowPlayers,
+        true,
+        m_scalePolicy);
+    if (admission != Engine::Net::LayerLoginAdmission::SplitPending) {
+        return false;
+    }
+
+    const Engine::Net::LayerSplitPlan plan = Engine::Net::PlanLayerSplit(localPlayers, m_scalePolicy);
+    if (!plan.shouldSplit || plan.migrateCount == 0) {
+        return false;
+    }
+
+    std::vector<Engine::Net::UserId> migrateIds;
+    migrateIds.reserve(static_cast<size_t>(localPlayers));
+    {
+        std::lock_guard<std::mutex> lock(m_clientsMutex);
+        for (const auto& entry : m_clients) {
+            if (entry.second) {
+                migrateIds.push_back(entry.first);
+            }
+        }
+    }
+
+    if (migrateIds.empty()) {
+        return false;
+    }
+
+    std::sort(migrateIds.begin(), migrateIds.end());
+    if (migrateIds.size() > plan.migrateCount) {
+        migrateIds.resize(plan.migrateCount);
+    }
+
+    for (Engine::Net::UserId userId : migrateIds) {
+        SendLayerMigrationRedirect(userId);
+        if (onPlayerMigrated) {
+            onPlayerMigrated(userId);
+        }
+        RemoveClient(userId);
+    }
+
+    LOG_INFO_FMT("NetServer",
+                 "Layer split migrated %zu players to overflow shard %u",
+                 migrateIds.size(),
+                 m_shardConfig.overflowShardId != 0 ? m_shardConfig.overflowShardId
+                                                    : m_shardConfig.shardId);
+    return true;
 }
 
 
@@ -1064,26 +1160,41 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
 
 
-            if (IsShardAtCapacity()) {
+            const uint32_t localPlayers = static_cast<uint32_t>(GetLoggedInClientCount());
+            const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
+            const auto admission = Engine::Net::EvaluateLayerLoginAdmission(
+                localPlayers,
+                overflowPlayers,
+                m_shardConfig.HasOverflowTarget(),
+                m_scalePolicy);
 
+            if (admission != Engine::Net::LayerLoginAdmission::AcceptLocal) {
                 Engine::Net::LoginResponsePayload response;
-
                 response.assignedUserId = userId;
 
-                FillRedirectResponse(response);
+                if (admission == Engine::Net::LayerLoginAdmission::RedirectOverflow) {
+                    FillRedirectResponse(response);
+                } else if (admission == Engine::Net::LayerLoginAdmission::SplitPending) {
+                    response.success = false;
+                    response.redirect = false;
+                    response.message = "split_pending";
+                } else {
+                    response.success = false;
+                    response.redirect = false;
+                    response.message = "shard_full";
+                }
 
                 SendToClient(userId, Engine::Net::MakeMessage(
-
                                          Engine::Net::MessageType::LoginResponse,
-
                                          response.Serialize(),
-
                                          m_sequence++));
 
-                LOG_WARNING_FMT("NetServer", "Rejected login for user %u (shard at capacity)", userId);
+                LOG_WARNING_FMT("NetServer",
+                                "Rejected login for user %u (%s)",
+                                userId,
+                                response.message.c_str());
 
                 break;
-
             }
 
             if (!m_loginRateLimiter.TryConsume(0)) {

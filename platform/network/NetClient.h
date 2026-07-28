@@ -99,6 +99,11 @@ private:
     std::string m_password;
     TlsConfig m_tlsConfig;
     std::atomic<bool> m_loginRejected{false};
+    std::atomic<bool> m_loginRedirectPending{false};
+    std::string m_lastLoginDisplayName;
+    std::string m_pendingRedirectHost;
+    uint16_t m_pendingRedirectTcpPort = 0;
+    uint16_t m_pendingRedirectUdpPort = 0;
 };
 
 } // namespace Networking
