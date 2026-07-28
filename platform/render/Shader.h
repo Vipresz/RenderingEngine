@@ -31,6 +31,7 @@ public:
     GLint GetEyePositionLocation();
     GLint GetSpecularIntensityLocation();
     GLint GetShininessLocation();
+    GLint GetUseTextureLocation();
     
     // Check if shader is valid
     bool IsValid() const { return shaderID != 0; }
@@ -56,12 +57,15 @@ private:
     GLint uniformSpecularIntensity;
     GLint uniformShininess;
     GLint uniformTexture;
+    GLint uniformUseTexture;
     GLint uniformDirectionalLightTransform;
+    bool uniformLocationsResolved;
     
     void CompileShader(const char* vertexCode, const char* fragmentCode);
     void CompileShader(const char* vertexCode, const char* geometryCode, const char* fragmentCode);
-    void AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderType);
+    bool AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderType);
     void CompileProgram();
+    void ResolveUniformLocations();
 };
 
 } // namespace Render

@@ -30,6 +30,9 @@ public:
     void Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) override;
     void Shutdown(ECS::Registry& registry) override;
 
+    // Draw the current UI builder without needing ECS (used during boot loading).
+    void PresentFrame();
+
     void SetUIBuilder(UIBuilder builder);
     void SetStyle(const MenuStyle& style);
     MenuStyle& GetStyle() { return m_style; }

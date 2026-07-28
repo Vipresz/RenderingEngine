@@ -32,6 +32,18 @@ TEST(MovementCommandSanitizeTest, WalkSpeedWhenNotRunning) {
     EXPECT_FLOAT_EQ(command.movementSpeed, Engine::Net::kAuthoritativeWalkSpeed);
 }
 
+TEST(MovementCommandSanitizeTest, UsesProvidedSpeedConfig) {
+    MovementCommand command;
+    command.run = true;
+    command.movementSpeed = 999.0f;
+
+    Engine::Net::MovementSpeedConfig speeds;
+    speeds.walkSpeed = 2.0f;
+    speeds.runSpeed = 4.0f;
+    SanitizeMovementCommand(command, speeds);
+    EXPECT_FLOAT_EQ(command.movementSpeed, 4.0f);
+}
+
 TEST(NetPacketPayloadLimitTest, RejectsOversizedPayloadHeader) {
     Engine::Net::NetPacket packet;
     packet.header.magic = Engine::Net::kProtocolMagic;

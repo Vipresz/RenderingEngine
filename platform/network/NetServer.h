@@ -42,6 +42,9 @@ public:
     bool Start(const std::string& host, uint16_t port, uint16_t udpPort = Engine::Net::kDefaultUdpPort);
     void Stop();
 
+    bool IsUdpBound() const { return m_udpChannel.IsOpen(); }
+    bool HasUdpEndpointFor(Engine::Net::UserId userId) const;
+
     void SetRequiredAuthToken(std::string token) { m_requiredAuthToken = std::move(token); }
     const std::string& GetRequiredAuthToken() const { return m_requiredAuthToken; }
 

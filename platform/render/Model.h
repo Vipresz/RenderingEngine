@@ -22,6 +22,9 @@ public:
     Model();
     
     void LoadModel(const std::string& fileName);
+    /// Build GPU meshes from an already-imported Assimp scene (no second disk read).
+    /// @param sourcePath Original/resolved path used for texture directory resolution.
+    bool LoadModelFromScene(const aiScene* scene, const std::string& sourcePath);
     void RenderModel();
     void RenderModelPerMeshTexture(GLint useTextureUniformLoc);
     void ClearModel();

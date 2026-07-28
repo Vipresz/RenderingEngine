@@ -85,27 +85,29 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
     }
 
     if (!m_udpChannel.Bind(host, udpPort)) {
-        LOG_WARNING_FMT("NetServer", "UDP bind failed on %s:%u — unreliable movement disabled", host.c_str(), udpPort);
-    } else {
-        m_udpChannel.SetUnreliableTransformHandler(
-            [this](const Engine::Net::TransformStatePayload& transform, const UdpDatagramContext& context) {
-                // Authoritative mode ignores client-originated transforms; movement commands only.
-                if (m_authoritativeMode) {
-                    return;
-                }
-                const Engine::Net::UserId userId = ResolveUdpUser(context);
-                if (userId == Engine::Net::kInvalidUserId) {
-                    return;
-                }
-                Engine::Net::TransformStatePayload authorized = transform;
-                authorized.userId = userId;
-                HandleUnreliableTransform(userId, authorized);
-            });
-        m_udpChannel.SetUdpSessionRegisterHandler(
-            [this](const Engine::Net::UdpSessionRegisterPayload& registration, const UdpDatagramContext& context) {
-                HandleUdpSessionRegister(registration, context);
-            });
+        LOG_ERROR_FMT("NetServer", "UDP bind failed on %s:%u", host.c_str(), udpPort);
+        m_listenSocket.Close();
+        return false;
     }
+
+    m_udpChannel.SetUnreliableTransformHandler(
+        [this](const Engine::Net::TransformStatePayload& transform, const UdpDatagramContext& context) {
+            // Authoritative mode ignores client-originated transforms; movement commands only.
+            if (m_authoritativeMode) {
+                return;
+            }
+            const Engine::Net::UserId userId = ResolveUdpUser(context);
+            if (userId == Engine::Net::kInvalidUserId) {
+                return;
+            }
+            Engine::Net::TransformStatePayload authorized = transform;
+            authorized.userId = userId;
+            HandleUnreliableTransform(userId, authorized);
+        });
+    m_udpChannel.SetUdpSessionRegisterHandler(
+        [this](const Engine::Net::UdpSessionRegisterPayload& registration, const UdpDatagramContext& context) {
+            HandleUdpSessionRegister(registration, context);
+        });
 
     m_running = true;
     m_acceptThread = std::thread([this]() { AcceptLoop(); });
@@ -154,6 +156,11 @@ void NetServer::Stop() {
 size_t NetServer::GetClientCount() const {
     std::lock_guard<std::mutex> lock(m_clientsMutex);
     return m_clients.size();
+}
+
+bool NetServer::HasUdpEndpointFor(Engine::Net::UserId userId) const {
+    std::lock_guard<std::mutex> lock(m_worldMutex);
+    return m_userToEndpoint.find(userId) != m_userToEndpoint.end();
 }
 
 void NetServer::BroadcastGenericData(const Engine::Net::GenericDataPayload& payload,

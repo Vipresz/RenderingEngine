@@ -50,8 +50,7 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
     const float deltaTime = std::max(command.deltaTime, 0.0f);
     glm::vec3 moveDirection(command.moveX, 0.0f, command.moveZ);
     const bool isMoving = glm::length(moveDirection) > 0.0001f;
-    const float currentMovementSpeed =
-        command.run ? (command.movementSpeed * 2.5f) : command.movementSpeed;
+    const float currentMovementSpeed = std::max(0.0f, command.movementSpeed);
 
     if (isMoving) {
         moveDirection = glm::normalize(moveDirection);
@@ -60,6 +59,8 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
     const bool wasAirborne = state.isJumping;
     constexpr float kRotationSpeed = 720.0f;
     const float maxRotation = kRotationSpeed * deltaTime;
+    const float yawBefore = state.yawDegrees;
+    float standingTurnDelta = 0.0f;
 
     // Grounded: steer from input. Airborne: keep leave-ground facing unless RMB look.
     if (!wasAirborne) {
@@ -69,6 +70,14 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
             RotateYawToward(state.yawDegrees, desiredYaw, maxRotation);
         } else if (!command.faceMovement) {
             RotateYawToward(state.yawDegrees, command.facingYawDegrees, maxRotation);
+            // Standing RMB look: positive yaw change = turn right (mouse right).
+            if (!isMoving) {
+                standingTurnDelta = ShortestAngleDelta(yawBefore, state.yawDegrees);
+                if (std::abs(standingTurnDelta) <= 0.01f) {
+                    standingTurnDelta =
+                        ShortestAngleDelta(state.yawDegrees, command.facingYawDegrees);
+                }
+            }
         }
     } else if (!command.faceMovement) {
         RotateYawToward(state.yawDegrees, command.facingYawDegrees, maxRotation);
@@ -137,14 +146,54 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
 
     if (state.isJumping && state.jumpAnimationActive) {
         state.animationState = MovementAnimationState::Jumping;
+        state.standingTurnSign = 0;
+        state.standingTurnHoldSeconds = 0.0f;
     } else if (state.isJumping) {
         // Falling without a jump press — keep last grounded locomotion pose frozen as Idle.
         state.animationState = MovementAnimationState::Idle;
+        state.standingTurnSign = 0;
+        state.standingTurnHoldSeconds = 0.0f;
     } else if (isMoving) {
         state.animationState =
             command.run ? MovementAnimationState::Running : MovementAnimationState::Walking;
+        state.standingTurnSign = 0;
+        state.standingTurnHoldSeconds = 0.0f;
+    } else if (!command.faceMovement) {
+        // Standing RMB look. Mouse motion is bursty — without a short hold, Idle↔Turn
+        // every few frames restarts Left_turn/Right_turn instead of looping.
+        constexpr float kTurnEnterDegrees = 0.5f;
+        constexpr float kTurnHoldSeconds = 0.18f;
+        const float remainingToFace =
+            ShortestAngleDelta(state.yawDegrees, command.facingYawDegrees);
+
+        float turnSignal = standingTurnDelta;
+        if (std::abs(turnSignal) <= kTurnEnterDegrees) {
+            turnSignal = remainingToFace;
+        }
+
+        if (std::abs(turnSignal) > kTurnEnterDegrees) {
+            // Positive yaw follows mouse-right; authored clips are opposite that sign.
+            state.standingTurnSign = turnSignal > 0.0f ? 1 : -1;
+            state.standingTurnHoldSeconds = kTurnHoldSeconds;
+        } else {
+            state.standingTurnHoldSeconds =
+                std::max(0.0f, state.standingTurnHoldSeconds - deltaTime);
+            if (state.standingTurnHoldSeconds <= 0.0f) {
+                state.standingTurnSign = 0;
+            }
+        }
+
+        if (state.standingTurnSign > 0) {
+            state.animationState = MovementAnimationState::TurningLeft;
+        } else if (state.standingTurnSign < 0) {
+            state.animationState = MovementAnimationState::TurningRight;
+        } else {
+            state.animationState = MovementAnimationState::Idle;
+        }
     } else {
         state.animationState = MovementAnimationState::Idle;
+        state.standingTurnSign = 0;
+        state.standingTurnHoldSeconds = 0.0f;
     }
 }
 

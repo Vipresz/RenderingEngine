@@ -43,8 +43,12 @@ public:
     Animation();
     ~Animation();
     
-    // Load animation from file
-    bool LoadAnimation(const std::string& filePath);
+    // Load animation from file.
+    // stripRootMotion: lock hips/root planar (XZ) translation to the first key.
+    // stripVerticalRootMotion: also lock Y (use for jumps; physics owns height).
+    bool LoadAnimation(const std::string& filePath,
+                       bool stripRootMotion = false,
+                       bool stripVerticalRootMotion = false);
     
     // Get animation duration in seconds
     float GetDuration() const { return m_duration; }
@@ -70,6 +74,7 @@ private:
     
     // Helper methods
     void LoadAnimationChannels(const aiAnimation* animation);
+    void StripLocomotionRootMotion(bool stripVertical);
 };
 
 } // namespace Render

@@ -6,6 +6,7 @@
 #include "render/components/TransformComponent.h"
 
 #include <algorithm>
+#include <cmath>
 #include <glm/glm.hpp>
 
 using Engine::Platform::Render::Components::AnimationComponent;
@@ -211,7 +212,7 @@ void AuthoritativeGameSimulator::ApplyMovement(Engine::Net::UserId userId,
         return;
     }
 
-    Engine::Net::SanitizeMovementCommand(command);
+    Engine::Net::SanitizeMovementCommand(command, m_movementSpeeds);
     playerIt->second.lastProcessedTick = command.tick;
 
     PlayerState& player = playerIt->second;
@@ -235,12 +236,23 @@ void AuthoritativeGameSimulator::ApplyMovement(Engine::Net::UserId userId,
             case Engine::Net::MovementAnimationState::Jumping:
                 anim->currentState = AnimationComponent::AnimationState::Jumping;
                 break;
+            case Engine::Net::MovementAnimationState::TurningLeft:
+                anim->currentState = AnimationComponent::AnimationState::TurningLeft;
+                break;
+            case Engine::Net::MovementAnimationState::TurningRight:
+                anim->currentState = AnimationComponent::AnimationState::TurningRight;
+                break;
             case Engine::Net::MovementAnimationState::Idle:
             default:
                 anim->currentState = AnimationComponent::AnimationState::Idle;
                 break;
         }
         anim->isRunning = anim->currentState == AnimationComponent::AnimationState::Running;
+        anim->airVelocityX = player.movement.airVelocityX;
+        anim->airVelocityZ = player.movement.airVelocityZ;
+        anim->locomotionSpeed = std::sqrt(
+            player.movement.airVelocityX * player.movement.airVelocityX +
+            player.movement.airVelocityZ * player.movement.airVelocityZ);
     }
 
     BroadcastAuthoritativeTransform(userId, player, command.tick);
@@ -300,6 +312,13 @@ Engine::Net::TransformStatePayload AuthoritativeGameSimulator::BuildTransformPay
     payload.tick = tick;
     payload.position = player.movement.position;
     payload.rotationDegrees = glm::vec3(0.0f, player.movement.yawDegrees, 0.0f);
+    payload.isJumping = player.movement.isJumping;
+    payload.jumpAnimationActive = player.movement.jumpAnimationActive;
+    payload.jumpVelocity = player.movement.jumpVelocity;
+    payload.airVelocityX = player.movement.airVelocityX;
+    payload.airVelocityZ = player.movement.airVelocityZ;
+    payload.groundLevel = player.movement.groundLevel;
+    payload.animationState = static_cast<uint8_t>(player.movement.animationState);
     return payload;
 }
 

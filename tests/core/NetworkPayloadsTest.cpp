@@ -54,6 +54,13 @@ TEST(NetworkPayloadsTest, TransformStateRoundTrip) {
     original.tick = 1234;
     original.position = glm::vec3(1.0f, 2.0f, 3.0f);
     original.rotationDegrees = glm::vec3(10.0f, 20.0f, 30.0f);
+    original.isJumping = true;
+    original.jumpAnimationActive = true;
+    original.jumpVelocity = 4.5f;
+    original.airVelocityX = 1.25f;
+    original.airVelocityZ = -0.5f;
+    original.groundLevel = 1.0f;
+    original.animationState = 3;
 
     TransformStatePayload decoded;
     ASSERT_TRUE(TransformStatePayload::Deserialize(original.Serialize(), decoded));
@@ -63,4 +70,29 @@ TEST(NetworkPayloadsTest, TransformStateRoundTrip) {
     EXPECT_FLOAT_EQ(decoded.position.y, 2.0f);
     EXPECT_FLOAT_EQ(decoded.position.z, 3.0f);
     EXPECT_FLOAT_EQ(decoded.rotationDegrees.x, 10.0f);
+    EXPECT_TRUE(decoded.isJumping);
+    EXPECT_TRUE(decoded.jumpAnimationActive);
+    EXPECT_FLOAT_EQ(decoded.jumpVelocity, 4.5f);
+    EXPECT_FLOAT_EQ(decoded.airVelocityX, 1.25f);
+    EXPECT_FLOAT_EQ(decoded.airVelocityZ, -0.5f);
+    EXPECT_FLOAT_EQ(decoded.groundLevel, 1.0f);
+    EXPECT_EQ(decoded.animationState, 3u);
+}
+
+TEST(NetworkPayloadsTest, TransformStateLegacyPayloadWithoutJumpFields) {
+    NetBuffer legacy;
+    legacy.WriteU32(11);
+    legacy.WriteU64(22);
+    legacy.WriteFloat(1.0f);
+    legacy.WriteFloat(2.0f);
+    legacy.WriteFloat(3.0f);
+    legacy.WriteFloat(0.0f);
+    legacy.WriteFloat(90.0f);
+    legacy.WriteFloat(0.0f);
+
+    TransformStatePayload decoded;
+    ASSERT_TRUE(TransformStatePayload::Deserialize(legacy, decoded));
+    EXPECT_EQ(decoded.userId, 11u);
+    EXPECT_FALSE(decoded.isJumping);
+    EXPECT_FLOAT_EQ(decoded.groundLevel, 2.0f);
 }

@@ -12,9 +12,15 @@ namespace Net {
 constexpr const char* kMovementCommandChannel = "movement";
 constexpr const char* kLoadoutChannel = "loadout";
 
-constexpr float kAuthoritativeWalkSpeed = 1.4f;
-constexpr float kAuthoritativeRunSpeed = 2.8f;
+// Fallback defaults when a game/server hasn't loaded character_stats.json yet.
+constexpr float kAuthoritativeWalkSpeed = 2.8f;
+constexpr float kAuthoritativeRunSpeed = 5.25f;
 constexpr float kMaxMovementDeltaSeconds = 0.05f;
+
+struct MovementSpeedConfig {
+    float walkSpeed = kAuthoritativeWalkSpeed;
+    float runSpeed = kAuthoritativeRunSpeed;
+};
 
 inline float NormalizeDegrees(float angle) {
     while (angle > 180.0f) {
@@ -72,14 +78,17 @@ inline bool DeserializeMovementCommand(const NetBuffer& buffer, MovementCommand&
 }
 
 // Sanitize client-provided movement fields before authoritative simulation.
-inline void SanitizeMovementCommand(MovementCommand& command) {
+inline void SanitizeMovementCommand(MovementCommand& command,
+                                    const MovementSpeedConfig& speeds = MovementSpeedConfig{}) {
     if (command.deltaTime < 0.0f) {
         command.deltaTime = 0.0f;
     }
     if (command.deltaTime > kMaxMovementDeltaSeconds) {
         command.deltaTime = kMaxMovementDeltaSeconds;
     }
-    command.movementSpeed = command.run ? kAuthoritativeRunSpeed : kAuthoritativeWalkSpeed;
+    const float walkSpeed = speeds.walkSpeed > 0.0f ? speeds.walkSpeed : kAuthoritativeWalkSpeed;
+    const float runSpeed = speeds.runSpeed > 0.0f ? speeds.runSpeed : kAuthoritativeRunSpeed;
+    command.movementSpeed = command.run ? runSpeed : walkSpeed;
     command.moveX = std::clamp(command.moveX, -1.0f, 1.0f);
     command.moveZ = std::clamp(command.moveZ, -1.0f, 1.0f);
     command.facingYawDegrees = NormalizeDegrees(command.facingYawDegrees);

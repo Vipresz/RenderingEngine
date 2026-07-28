@@ -49,6 +49,7 @@ public:
     // Skip GPU skinning (boneCount=0). Mesh verts stay in authored bind pose.
     void ResetToBindPose();
     bool IsBindPoseActive() const { return m_bindPoseActive; }
+    void SetBindPoseActive(bool active) { m_bindPoseActive = active; }
     
     void GetFinalBoneMatrices(std::vector<glm::mat4>& boneMatrices) const;
     

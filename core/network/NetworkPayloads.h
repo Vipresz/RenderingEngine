@@ -82,6 +82,16 @@ struct TransformStatePayload {
     glm::vec3 position{0.0f};
     glm::vec3 rotationDegrees{0.0f};
 
+    // Authoritative locomotion snapshot — required so clients can reconcile jumps
+    // instead of inventing airborne state from local prediction.
+    bool isJumping = false;
+    bool jumpAnimationActive = false;
+    float jumpVelocity = 0.0f;
+    float airVelocityX = 0.0f;
+    float airVelocityZ = 0.0f;
+    float groundLevel = 0.0f;
+    uint8_t animationState = 0; // MovementAnimationState
+
     NetBuffer Serialize() const {
         NetBuffer buffer;
         buffer.WriteU32(userId);
@@ -92,20 +102,55 @@ struct TransformStatePayload {
         buffer.WriteFloat(rotationDegrees.x);
         buffer.WriteFloat(rotationDegrees.y);
         buffer.WriteFloat(rotationDegrees.z);
+        buffer.WriteU8(isJumping ? 1 : 0);
+        buffer.WriteU8(jumpAnimationActive ? 1 : 0);
+        buffer.WriteFloat(jumpVelocity);
+        buffer.WriteFloat(airVelocityX);
+        buffer.WriteFloat(airVelocityZ);
+        buffer.WriteFloat(groundLevel);
+        buffer.WriteU8(animationState);
         return buffer;
     }
 
     static bool Deserialize(const NetBuffer& buffer, TransformStatePayload& out) {
         NetBuffer copy = buffer;
         copy.ResetRead();
-        return copy.ReadU32(out.userId) &&
-               copy.ReadU64(out.tick) &&
-               copy.ReadFloat(out.position.x) &&
-               copy.ReadFloat(out.position.y) &&
-               copy.ReadFloat(out.position.z) &&
-               copy.ReadFloat(out.rotationDegrees.x) &&
-               copy.ReadFloat(out.rotationDegrees.y) &&
-               copy.ReadFloat(out.rotationDegrees.z);
+        if (!copy.ReadU32(out.userId) ||
+            !copy.ReadU64(out.tick) ||
+            !copy.ReadFloat(out.position.x) ||
+            !copy.ReadFloat(out.position.y) ||
+            !copy.ReadFloat(out.position.z) ||
+            !copy.ReadFloat(out.rotationDegrees.x) ||
+            !copy.ReadFloat(out.rotationDegrees.y) ||
+            !copy.ReadFloat(out.rotationDegrees.z)) {
+            return false;
+        }
+
+        // Legacy payloads (pre-jump snapshot) remain valid; jump fields default to grounded.
+        out.isJumping = false;
+        out.jumpAnimationActive = false;
+        out.jumpVelocity = 0.0f;
+        out.airVelocityX = 0.0f;
+        out.airVelocityZ = 0.0f;
+        out.groundLevel = out.position.y;
+        out.animationState = 0;
+
+        uint8_t jumping = 0;
+        uint8_t jumpAnim = 0;
+        if (!copy.ReadU8(jumping)) {
+            return true;
+        }
+        if (!copy.ReadU8(jumpAnim) ||
+            !copy.ReadFloat(out.jumpVelocity) ||
+            !copy.ReadFloat(out.airVelocityX) ||
+            !copy.ReadFloat(out.airVelocityZ) ||
+            !copy.ReadFloat(out.groundLevel) ||
+            !copy.ReadU8(out.animationState)) {
+            return false;
+        }
+        out.isJumping = jumping != 0;
+        out.jumpAnimationActive = jumpAnim != 0;
+        return true;
     }
 };
 

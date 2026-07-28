@@ -63,7 +63,7 @@ void UISystem::Shutdown() {
 
 void UISystem::Initialize(ECS::Registry& /*registry*/) {}
 
-void UISystem::Update(float /*deltaTime*/, ECS::Registry& /*registry*/, uint64_t /*tickNumber*/) {
+void UISystem::PresentFrame() {
     if (!m_nuklear || !m_nuklear->IsInitialized()) {
         return;
     }
@@ -91,6 +91,10 @@ void UISystem::Update(float /*deltaTime*/, ECS::Registry& /*registry*/, uint64_t
     }
 
     m_nuklear->EndFrame();
+}
+
+void UISystem::Update(float /*deltaTime*/, ECS::Registry& /*registry*/, uint64_t /*tickNumber*/) {
+    PresentFrame();
 }
 
 void UISystem::Shutdown(ECS::Registry& /*registry*/) {

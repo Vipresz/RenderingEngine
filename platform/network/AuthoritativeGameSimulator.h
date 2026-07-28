@@ -34,6 +34,11 @@ public:
     void SetTerrainSampler(TerrainHeightSampler sampler) { m_terrainSampler = std::move(sampler); }
     bool LoadHeightmap(const std::string& imagePath, float sizeX, float sizeZ, float heightScale = 10.0f);
     void SetSpawnPosition(const glm::vec3& position) { m_spawnPosition = position; }
+    void SetMovementSpeeds(float walkSpeed, float runSpeed) {
+        m_movementSpeeds.walkSpeed = walkSpeed;
+        m_movementSpeeds.runSpeed = runSpeed > walkSpeed ? runSpeed : walkSpeed;
+    }
+    const Engine::Net::MovementSpeedConfig& GetMovementSpeeds() const { return m_movementSpeeds; }
 
     // Thread-safe: enqueue only.
     void OnClientLoggedIn(Engine::Net::UserId userId, const std::string& displayName);
@@ -89,6 +94,7 @@ private:
     std::unique_ptr<Engine::Terrain::HeightmapTerrain> m_heightmap;
     TerrainHeightSampler m_terrainSampler;
     glm::vec3 m_spawnPosition{5.0f, 1.0f, 5.0f};
+    Engine::Net::MovementSpeedConfig m_movementSpeeds;
     float m_snapshotAccumulator = 0.0f;
     float m_snapshotIntervalSeconds = 0.1f;
     uint64_t m_tickNumber = 0;

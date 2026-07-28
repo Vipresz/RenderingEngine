@@ -92,6 +92,8 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
         glBindTexture(GL_TEXTURE_2D, context.defaultWhiteTexture);
     }
 
+    const GLint uniformUseTexture = context.shader->GetUseTextureLocation();
+
     auto entities = context.registry->View<Components::MeshComponent, Components::TransformComponent>();
     for (EntityID entityID : entities) {
         auto* meshComp = context.registry->GetComponent<Components::MeshComponent>(entityID);
@@ -122,7 +124,6 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
         UploadBoneUniforms(shaderProgramID, animComp ? animComp->skeleton : nullptr);
 
         if (meshComp->model) {
-            const GLint uniformUseTexture = glGetUniformLocation(shaderProgramID, "useTexture");
             meshComp->model->RenderModelPerMeshTexture(uniformUseTexture);
         }
     }

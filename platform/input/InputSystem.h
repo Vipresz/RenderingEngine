@@ -41,9 +41,20 @@ public:
     void SetCharacterEntity(EntityID entityID) { m_characterEntityID = entityID; }
     EntityID GetCharacterEntity() const { return m_characterEntityID; }
     
-    // Character movement speed
-    void SetMovementSpeed(float speed) { m_movementSpeed = speed; }
-    float GetMovementSpeed() const { return m_movementSpeed; }
+    // Character movement speeds (world units / second)
+    void SetMovementSpeed(float walkSpeed) {
+        m_walkSpeed = walkSpeed;
+        if (m_runSpeed < m_walkSpeed) {
+            m_runSpeed = m_walkSpeed;
+        }
+    }
+    void SetMovementSpeeds(float walkSpeed, float runSpeed) {
+        m_walkSpeed = walkSpeed;
+        m_runSpeed = runSpeed > walkSpeed ? runSpeed : walkSpeed;
+    }
+    float GetMovementSpeed() const { return m_walkSpeed; }
+    float GetWalkSpeed() const { return m_walkSpeed; }
+    float GetRunSpeed() const { return m_runSpeed; }
     
     // Terrain for height sampling (character adheres to terrain)
     void SetTerrainModel(Render::Model* terrain) { m_terrainModel = terrain; }
@@ -63,7 +74,8 @@ private:
     Render::ICameraSource* m_cameraSource = nullptr;
     Render::Model* m_terrainModel = nullptr;
     EntityID m_characterEntityID = 0; // Track which entity is the character
-    float m_movementSpeed = 5.0f; // units per second
+    float m_walkSpeed = 2.8f;
+    float m_runSpeed = 5.25f;
     
     // Input state
     bool m_moveForward = false;

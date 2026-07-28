@@ -3,6 +3,7 @@
 #include "Logger.h"
 #include "core/ecs/Registry.h"
 #include "core/network/CharacterMovementSimulator.h"
+#include "core/network/CharacterMovementState.h"
 #include "core/network/InputBuffer.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MaterialComponent.h"
@@ -23,6 +24,54 @@ namespace Engine {
 namespace Platform {
 namespace Networking {
 namespace Systems {
+
+namespace {
+
+void ApplyRemoteAnimationFromPlayback(AnimationComponent& anim,
+                                      bool isJumping,
+                                      bool jumpAnimationActive,
+                                      float jumpVelocity,
+                                      float airVelocityX,
+                                      float airVelocityZ,
+                                      float groundLevel,
+                                      uint8_t animationState) {
+    anim.isJumping = isJumping;
+    anim.jumpAnimationActive = jumpAnimationActive;
+    anim.jumpVelocity = jumpVelocity;
+    anim.airVelocityX = airVelocityX;
+    anim.airVelocityZ = airVelocityZ;
+    anim.groundLevel = groundLevel;
+    anim.locomotionSpeed = std::sqrt(airVelocityX * airVelocityX + airVelocityZ * airVelocityZ);
+
+    switch (static_cast<Engine::Net::MovementAnimationState>(animationState)) {
+        case Engine::Net::MovementAnimationState::Walking:
+            anim.currentState = AnimationComponent::AnimationState::Walking;
+            break;
+        case Engine::Net::MovementAnimationState::Running:
+            anim.currentState = AnimationComponent::AnimationState::Running;
+            break;
+        case Engine::Net::MovementAnimationState::Jumping:
+            anim.currentState = AnimationComponent::AnimationState::Jumping;
+            break;
+        case Engine::Net::MovementAnimationState::TurningLeft:
+            anim.currentState = AnimationComponent::AnimationState::TurningLeft;
+            break;
+        case Engine::Net::MovementAnimationState::TurningRight:
+            anim.currentState = AnimationComponent::AnimationState::TurningRight;
+            break;
+        case Engine::Net::MovementAnimationState::Idle:
+        default:
+            if (isJumping || jumpAnimationActive) {
+                anim.currentState = AnimationComponent::AnimationState::Jumping;
+            } else {
+                anim.currentState = AnimationComponent::AnimationState::Idle;
+            }
+            break;
+    }
+    anim.isRunning = anim.currentState == AnimationComponent::AnimationState::Running;
+}
+
+} // namespace
 
 NetworkSystem::NetworkSystem() {
     // After Input (0), Camera (10), equipment (24), Animation (50) so we send the final pose.
@@ -248,6 +297,16 @@ void NetworkSystem::SendLocalTransform(ECS::Registry& registry, uint64_t tickNum
     payload.tick = tickNumber;
     payload.position = transform->position;
     payload.rotationDegrees = transform->rotation;
+    if (const AnimationComponent* anim =
+            registry.GetComponent<AnimationComponent>(m_localPlayerEntity)) {
+        payload.isJumping = anim->isJumping;
+        payload.jumpAnimationActive = anim->jumpAnimationActive;
+        payload.jumpVelocity = anim->jumpVelocity;
+        payload.airVelocityX = anim->airVelocityX;
+        payload.airVelocityZ = anim->airVelocityZ;
+        payload.groundLevel = anim->groundLevel;
+        payload.animationState = static_cast<uint8_t>(anim->currentState);
+    }
     m_client.SendTransformState(payload);
     m_lastSentPosition = payload.position;
     m_lastSentRotation = payload.rotationDegrees;
@@ -283,8 +342,11 @@ glm::vec3 NetworkSystem::LerpAnglesDegrees(const glm::vec3& from, const glm::vec
                      LerpAngleDegrees(from.z, to.z, t));
 }
 
-glm::vec3 NetworkSystem::ResolveRemotePosition(const glm::vec3& networkPosition) const {
-    if (!m_terrainModel) {
+glm::vec3 NetworkSystem::ResolveRemotePosition(const glm::vec3& networkPosition,
+                                                 bool isJumping) const {
+    if (!m_terrainModel || isJumping) {
+        // Trust networked Y while airborne — ground snapping here caused jump shake
+        // and made nameplates appear doubled (ground copy + air copy).
         return networkPosition;
     }
 
@@ -301,16 +363,23 @@ glm::vec3 NetworkSystem::ResolveRemotePosition(const glm::vec3& networkPosition)
 }
 
 void NetworkSystem::SetRemoteTarget(Engine::Net::UserId userId,
-                                    const glm::vec3& position,
-                                    const glm::vec3& rotation) {
-    const glm::vec3 resolvedPosition = ResolveRemotePosition(position);
+                                    const Engine::Net::TransformStatePayload& transform) {
+    const glm::vec3 resolvedPosition =
+        ResolveRemotePosition(transform.position, transform.isJumping);
     RemotePlaybackState& state = m_remotePlayback[userId];
     state.targetPosition = resolvedPosition;
-    state.targetRotation = rotation;
+    state.targetRotation = transform.rotationDegrees;
+    state.isJumping = transform.isJumping;
+    state.jumpAnimationActive = transform.jumpAnimationActive;
+    state.jumpVelocity = transform.jumpVelocity;
+    state.airVelocityX = transform.airVelocityX;
+    state.airVelocityZ = transform.airVelocityZ;
+    state.groundLevel = transform.groundLevel;
+    state.animationState = transform.animationState;
 
     if (!state.initialized) {
         state.displayPosition = resolvedPosition;
-        state.displayRotation = rotation;
+        state.displayRotation = transform.rotationDegrees;
         state.initialized = true;
     }
 }
@@ -364,19 +433,22 @@ void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
     }
     m_lastAcknowledgedTick = serverState.tick;
 
+    // Seed rollback from the server's documented movement snapshot — never from the
+    // live client jump fields (those are ahead of serverState.tick and cause Y thrash).
     Engine::Net::CharacterMovementState state;
     state.position = serverState.position;
     state.yawDegrees = serverState.rotationDegrees.y;
-    bool replayed = false;
+    state.isJumping = serverState.isJumping;
+    state.jumpVelocity = serverState.jumpVelocity;
+    state.groundLevel = serverState.groundLevel;
+    state.airVelocityX = serverState.airVelocityX;
+    state.airVelocityZ = serverState.airVelocityZ;
+    state.jumpAnimationActive = serverState.jumpAnimationActive;
+    state.animationState =
+        static_cast<Engine::Net::MovementAnimationState>(serverState.animationState);
     if (animComp) {
-        state.isJumping = animComp->isJumping;
-        state.jumpVelocity = animComp->jumpVelocity;
-        state.groundLevel = animComp->groundLevel;
         state.gravity = animComp->gravity;
         state.jumpInitialVelocity = animComp->jumpInitialVelocity;
-        state.airVelocityX = animComp->airVelocityX;
-        state.airVelocityZ = animComp->airVelocityZ;
-        state.jumpAnimationActive = animComp->jumpAnimationActive;
     }
 
     const Engine::Net::TerrainHeightSampler terrainSampler =
@@ -388,7 +460,6 @@ void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
 
     m_inputBuffer->ForEachAfter(serverState.tick, [&](const Engine::Net::MovementCommand& command) {
         Engine::Net::CharacterMovementSimulator::SimulateStep(state, command, terrainSampler);
-        replayed = true;
     });
 
     transform->position = state.position;
@@ -396,7 +467,7 @@ void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
     transform->rotation.x = serverState.rotationDegrees.x;
     transform->rotation.z = serverState.rotationDegrees.z;
 
-    if (!animComp || !replayed) {
+    if (!animComp) {
         return;
     }
 
@@ -406,6 +477,8 @@ void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
     animComp->airVelocityX = state.airVelocityX;
     animComp->airVelocityZ = state.airVelocityZ;
     animComp->jumpAnimationActive = state.jumpAnimationActive;
+    animComp->locomotionSpeed =
+        std::sqrt(state.airVelocityX * state.airVelocityX + state.airVelocityZ * state.airVelocityZ);
     switch (state.animationState) {
         case Engine::Net::MovementAnimationState::Walking:
             animComp->currentState = AnimationComponent::AnimationState::Walking;
@@ -415,6 +488,12 @@ void NetworkSystem::ReconcileWithRollback(ECS::Registry& registry,
             break;
         case Engine::Net::MovementAnimationState::Jumping:
             animComp->currentState = AnimationComponent::AnimationState::Jumping;
+            break;
+        case Engine::Net::MovementAnimationState::TurningLeft:
+            animComp->currentState = AnimationComponent::AnimationState::TurningLeft;
+            break;
+        case Engine::Net::MovementAnimationState::TurningRight:
+            animComp->currentState = AnimationComponent::AnimationState::TurningRight;
             break;
         case Engine::Net::MovementAnimationState::Idle:
         default:
@@ -447,15 +526,32 @@ void NetworkSystem::InterpolateRemoteTransforms(float deltaTime, ECS::Registry& 
         state.displayPosition = glm::mix(state.displayPosition, state.targetPosition, blend);
         state.displayRotation = LerpAnglesDegrees(state.displayRotation, state.targetRotation, blend);
 
-        glm::vec3 resolvedDisplay = ResolveRemotePosition(state.displayPosition);
-        if (std::abs(resolvedDisplay.y - state.displayPosition.y) < 0.2f) {
-            state.displayPosition.y = resolvedDisplay.y;
-        } else {
-            state.displayPosition.y = glm::mix(state.displayPosition.y, state.targetPosition.y, blend);
+        if (!state.isJumping) {
+            glm::vec3 resolvedDisplay =
+                ResolveRemotePosition(state.displayPosition, false);
+            if (std::abs(resolvedDisplay.y - state.displayPosition.y) < 0.2f) {
+                state.displayPosition.y = resolvedDisplay.y;
+            } else {
+                state.displayPosition.y =
+                    glm::mix(state.displayPosition.y, state.targetPosition.y, blend);
+            }
         }
 
         transform->position = state.displayPosition;
         transform->rotation = state.displayRotation;
+
+        AnimationComponent* anim = registry.GetComponent<AnimationComponent>(entity);
+        if (!anim) {
+            anim = &registry.AddComponent<AnimationComponent>(entity);
+        }
+        ApplyRemoteAnimationFromPlayback(*anim,
+                                         state.isJumping,
+                                         state.jumpAnimationActive,
+                                         state.jumpVelocity,
+                                         state.airVelocityX,
+                                         state.airVelocityZ,
+                                         state.groundLevel,
+                                         state.animationState);
     }
 }
 
@@ -471,7 +567,7 @@ void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t ti
         const Engine::Net::UserId userId = it->first;
         const Engine::Net::TransformStatePayload& transform = it->second;
         GetOrCreateRemoteEntity(userId, registry);
-        SetRemoteTarget(userId, transform.position, transform.rotationDegrees);
+        SetRemoteTarget(userId, transform);
         it = m_pendingTransforms.erase(it);
     }
 

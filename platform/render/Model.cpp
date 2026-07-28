@@ -122,35 +122,48 @@ void Model::LoadModel(const std::string& fileName) {
         aiProcess_JoinIdenticalVertices |
         aiProcess_LimitBoneWeights
     );
-    
-        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         std::string errorMsg = std::string("Model (") + pathToRead + ") failed to load: " + importer.GetErrorString();
         LOG_ERROR_FMT("Model", "%s", errorMsg.c_str());
         throw std::runtime_error(errorMsg);
     }
-    
+
+    if (!LoadModelFromScene(scene, pathToRead)) {
+        throw std::runtime_error("Model loaded but contains no meshes: " + pathToRead);
+    }
+}
+
+bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePath) {
+    if (!scene || !scene->mRootNode || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE)) {
+        LOG_ERROR_FMT("Model", "LoadModelFromScene failed: invalid scene (%s)", sourcePath.c_str());
+        return false;
+    }
+
     // Extract model directory for texture path resolution
-    size_t lastSlash = pathToRead.find_last_of("/\\");
+    size_t lastSlash = sourcePath.find_last_of("/\\");
     if (lastSlash != std::string::npos) {
-        m_modelDirectory = pathToRead.substr(0, lastSlash + 1);
+        m_modelDirectory = sourcePath.substr(0, lastSlash + 1);
     } else {
         m_modelDirectory = "";
     }
-    
+
     // Reset bounds before loading
     m_minX = m_minY = m_minZ = std::numeric_limits<float>::max();
     m_maxX = m_maxY = m_maxZ = std::numeric_limits<float>::lowest();
     m_boundsCalculated = false;
-    
+
     LoadNode(scene->mRootNode, scene);
     LoadMaterials(scene);
-    
+
     if (m_meshList.empty()) {
-        throw std::runtime_error("Model loaded but contains no meshes: " + pathToRead);
+        LOG_ERROR_FMT("Model", "LoadModelFromScene: no meshes in %s", sourcePath.c_str());
+        return false;
     }
-    
+
     CalculateBounds(scene);
     LOG_INFO_FMT("Model", "Model loaded: %zu meshes, height: %.2f", m_meshList.size(), GetHeight());
+    return true;
 }
 
 void Model::LoadNode(aiNode* node, const aiScene* scene) {

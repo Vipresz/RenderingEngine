@@ -32,6 +32,10 @@ MovementAnimationState ToMovementAnimationState(
             return MovementAnimationState::Running;
         case Render::Components::AnimationComponent::AnimationState::Jumping:
             return MovementAnimationState::Jumping;
+        case Render::Components::AnimationComponent::AnimationState::TurningLeft:
+            return MovementAnimationState::TurningLeft;
+        case Render::Components::AnimationComponent::AnimationState::TurningRight:
+            return MovementAnimationState::TurningRight;
         case Render::Components::AnimationComponent::AnimationState::Idle:
         default:
             return MovementAnimationState::Idle;
@@ -47,6 +51,10 @@ Render::Components::AnimationComponent::AnimationState FromMovementAnimationStat
             return Render::Components::AnimationComponent::AnimationState::Running;
         case MovementAnimationState::Jumping:
             return Render::Components::AnimationComponent::AnimationState::Jumping;
+        case MovementAnimationState::TurningLeft:
+            return Render::Components::AnimationComponent::AnimationState::TurningLeft;
+        case MovementAnimationState::TurningRight:
+            return Render::Components::AnimationComponent::AnimationState::TurningRight;
         case MovementAnimationState::Idle:
         default:
             return Render::Components::AnimationComponent::AnimationState::Idle;
@@ -90,6 +98,8 @@ void ApplyMovementState(Render::Components::TransformComponent& transform,
     animComp->jumpAnimationActive = state.jumpAnimationActive;
     animComp->currentState = FromMovementAnimationState(state.animationState);
     animComp->isRunning = state.animationState == MovementAnimationState::Running;
+    animComp->locomotionSpeed =
+        std::sqrt(state.airVelocityX * state.airVelocityX + state.airVelocityZ * state.airVelocityZ);
 }
 
 } // namespace
@@ -221,7 +231,8 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
     if (rmbHeld && m_cameraSource) {
         command.facingYawDegrees = m_cameraSource->GetPlanarFacingYawDegrees();
     }
-    command.movementSpeed = m_movementSpeed;
+    // movementSpeed is the final horizontal speed (server sanitize uses the same stats).
+    command.movementSpeed = isRunning ? m_runSpeed : m_walkSpeed;
     m_inputBuffer.Push(command);
 
     CharacterMovementState state = BuildMovementState(*transform, animComp);

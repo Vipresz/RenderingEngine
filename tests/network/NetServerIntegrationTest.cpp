@@ -6,8 +6,18 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <thread>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 using Engine::Net::TransformStatePayload;
 using Engine::Net::UdpSessionRegisterPayload;
@@ -19,8 +29,16 @@ using Engine::Platform::Networking::UdpChannel;
 namespace {
 
 constexpr const char* kHost = "127.0.0.1";
-constexpr uint16_t kTcpPort = 19210;
-constexpr uint16_t kUdpPort = 19211;
+
+// Process-unique base so parallel ctest/game_server instances don't collide on UDP bind.
+uint16_t TestPortBase() {
+#if defined(_WIN32)
+    const uint32_t pid = static_cast<uint32_t>(::GetCurrentProcessId());
+#else
+    const uint32_t pid = static_cast<uint32_t>(::getpid());
+#endif
+    return static_cast<uint16_t>(22000 + (pid % 800) * 40);
+}
 
 bool WaitUntil(const std::function<bool()>& predicate, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -38,9 +56,14 @@ bool WaitUntil(const std::function<bool()>& predicate, std::chrono::milliseconds
 class NetServerIntegrationTest : public ::testing::Test {
 protected:
     NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
 
     void SetUp() override {
-        ASSERT_TRUE(server.Start(kHost, kTcpPort, kUdpPort));
+        tcpPort = TestPortBase();
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
+        ASSERT_TRUE(server.IsUdpBound());
     }
 
     void TearDown() override {
@@ -50,10 +73,13 @@ protected:
 
 TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveUpdatesAuthority) {
     NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     ASSERT_TRUE(client.Login("integration_player"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, kUdpPort));
+    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
     ASSERT_TRUE(client.RegisterUdpSession());
+    ASSERT_TRUE(WaitUntil(
+        [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
+        std::chrono::seconds(2)));
 
     TransformStatePayload sent;
     sent.userId = client.GetUserId();
@@ -84,9 +110,9 @@ TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveUpdatesAuthority) {
 
 TEST_F(NetServerIntegrationTest, UnregisteredUdpMovementIsIgnored) {
     NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     ASSERT_TRUE(client.Login("unregistered_udp"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, kUdpPort));
+    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
 
     TransformStatePayload sent;
     sent.userId = client.GetUserId();
@@ -102,12 +128,12 @@ TEST_F(NetServerIntegrationTest, UnregisteredUdpMovementIsIgnored) {
 
 TEST_F(NetServerIntegrationTest, BadUdpSessionTokenDoesNotBindEndpoint) {
     NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     ASSERT_TRUE(client.Login("bad_token_player"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, kUdpPort));
+    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
 
     UdpChannel rogueChannel;
-    ASSERT_TRUE(rogueChannel.Connect(kHost, kUdpPort));
+    ASSERT_TRUE(rogueChannel.Connect(kHost, udpPort));
 
     UdpSessionRegisterPayload badRegistration;
     badRegistration.userId = client.GetUserId();
@@ -129,35 +155,46 @@ TEST_F(NetServerIntegrationTest, BadUdpSessionTokenDoesNotBindEndpoint) {
 TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveEchoesAuthoritativeState) {
     NetClient client;
     std::atomic<bool> receivedEcho{false};
+    const glm::vec3 expectedPosition(3.0f, 1.0f, 4.0f);
 
     ClientCallbacks callbacks;
     callbacks.onTransformState = [&](const TransformStatePayload& transform) {
         if (transform.userId == client.GetUserId() &&
-            glm::length(transform.position - glm::vec3(3.0f, 1.0f, 4.0f)) < 0.01f) {
+            glm::length(transform.position - expectedPosition) < 0.01f) {
             receivedEcho = true;
         }
     };
     client.SetCallbacks(std::move(callbacks));
 
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     ASSERT_TRUE(client.Login("echo_player"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, kUdpPort));
+    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
     ASSERT_TRUE(client.RegisterUdpSession());
+    ASSERT_TRUE(WaitUntil(
+        [&]() {
+            client.Poll();
+            return server.HasUdpEndpointFor(client.GetUserId());
+        },
+        std::chrono::seconds(2)));
 
     TransformStatePayload sent;
     sent.userId = client.GetUserId();
     sent.tick = 1;
-    sent.position = glm::vec3(3.0f, 1.0f, 4.0f);
+    sent.position = expectedPosition;
     sent.rotationDegrees = glm::vec3(0.0f, 45.0f, 0.0f);
-    ASSERT_TRUE(client.SendUnreliableTransform(sent));
 
+    // UDP datagrams can drop under load; retry until authority + echo are observed.
     const bool echoed = WaitUntil(
         [&]() {
+            if (!receivedEcho.load()) {
+                (void)client.SendUnreliableTransform(sent);
+            }
             client.Poll();
             return receivedEcho.load();
         },
         std::chrono::seconds(3));
-    EXPECT_TRUE(echoed);
+    EXPECT_TRUE(echoed) << "Did not receive authoritative transform echo for user "
+                         << client.GetUserId();
 
     client.Disconnect();
 }
@@ -165,10 +202,14 @@ TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveEchoesAuthoritativeState
 class NetServerAuthTest : public ::testing::Test {
 protected:
     NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
 
     void SetUp() override {
+        tcpPort = static_cast<uint16_t>(TestPortBase() + 10);
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.SetRequiredAuthToken("integration-secret");
-        ASSERT_TRUE(server.Start(kHost, kTcpPort + 10, kUdpPort + 10));
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
     }
 
     void TearDown() override {
@@ -179,11 +220,15 @@ protected:
 class NetServerCredentialTest : public ::testing::Test {
 protected:
     NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
 
     void SetUp() override {
+        tcpPort = static_cast<uint16_t>(TestPortBase() + 20);
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.GetCredentialStore().SetRequireCredentials(true);
         ASSERT_TRUE(server.GetCredentialStore().RegisterUser("alice", "secret123"));
-        ASSERT_TRUE(server.Start(kHost, kTcpPort + 20, kUdpPort + 20));
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
     }
 
     void TearDown() override {
@@ -193,16 +238,16 @@ protected:
 
 TEST_F(NetServerAuthTest, RejectsLoginWithMissingOrWrongAuthToken) {
     NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort + 10));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     EXPECT_FALSE(client.Login("no_token_player"));
 
     client.Disconnect();
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort + 10));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     client.SetAuthToken("wrong-secret");
     EXPECT_FALSE(client.Login("bad_token_player"));
 
     client.Disconnect();
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort + 10));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     client.SetAuthToken("integration-secret");
     EXPECT_TRUE(client.Login("good_token_player"));
 
@@ -211,12 +256,12 @@ TEST_F(NetServerAuthTest, RejectsLoginWithMissingOrWrongAuthToken) {
 
 TEST_F(NetServerCredentialTest, RejectsInvalidCredentialsAndAcceptsValidLogin) {
     NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort + 20));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     client.SetCredentials("alice", "wrong");
     EXPECT_FALSE(client.Login("alice_display"));
 
     client.Disconnect();
-    ASSERT_TRUE(client.Connect(kHost, kTcpPort + 20));
+    ASSERT_TRUE(client.Connect(kHost, tcpPort));
     client.SetCredentials("alice", "secret123");
     EXPECT_TRUE(client.Login("alice_display"));
 
@@ -226,10 +271,14 @@ TEST_F(NetServerCredentialTest, RejectsInvalidCredentialsAndAcceptsValidLogin) {
 class NetServerAuthoritativeModeTest : public ::testing::Test {
 protected:
     NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
 
     void SetUp() override {
+        tcpPort = static_cast<uint16_t>(TestPortBase() + 30);
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
         server.SetAuthoritativeMode(true);
-        ASSERT_TRUE(server.Start(kHost, kTcpPort + 30, kUdpPort + 30));
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
     }
 
     void TearDown() override {
@@ -252,11 +301,11 @@ TEST_F(NetServerAuthoritativeModeTest, DropsClientEntitySnapshotsAndTransforms) 
     };
     observer.SetCallbacks(std::move(observerCallbacks));
 
-    ASSERT_TRUE(publisher.Connect(kHost, kTcpPort + 30));
+    ASSERT_TRUE(publisher.Connect(kHost, tcpPort));
     ASSERT_TRUE(publisher.Login("auth_publisher"));
-    ASSERT_TRUE(publisher.ConnectUdp(kHost, kUdpPort + 30));
+    ASSERT_TRUE(publisher.ConnectUdp(kHost, udpPort));
     ASSERT_TRUE(publisher.RegisterUdpSession());
-    ASSERT_TRUE(observer.Connect(kHost, kTcpPort + 30));
+    ASSERT_TRUE(observer.Connect(kHost, tcpPort));
     ASSERT_TRUE(observer.Login("auth_observer"));
 
     Engine::Net::EntitySnapshot snapshot;

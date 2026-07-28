@@ -34,6 +34,7 @@ TEST(CharacterMovementSimulatorTest, RunningUsesHigherSpeed) {
 
     MovementCommand run = walk;
     run.run = true;
+    run.movementSpeed = 5.0f;
 
     CharacterMovementState walkState;
     CharacterMovementState runState;

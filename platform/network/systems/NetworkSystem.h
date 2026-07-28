@@ -110,6 +110,13 @@ private:
         glm::vec3 targetPosition{0.0f};
         glm::vec3 displayRotation{0.0f};
         glm::vec3 targetRotation{0.0f};
+        bool isJumping = false;
+        bool jumpAnimationActive = false;
+        float jumpVelocity = 0.0f;
+        float airVelocityX = 0.0f;
+        float airVelocityZ = 0.0f;
+        float groundLevel = 0.0f;
+        uint8_t animationState = 0; // MovementAnimationState
         bool initialized = false;
     };
 
@@ -119,8 +126,8 @@ private:
     void SendLocalTransform(ECS::Registry& registry, uint64_t tickNumber);
     void SendMovementCommand(const Engine::Net::MovementCommand& command);
     bool ShouldSendTransform(const Engine::Platform::Render::Components::TransformComponent& transform) const;
-    glm::vec3 ResolveRemotePosition(const glm::vec3& networkPosition) const;
-    void SetRemoteTarget(Engine::Net::UserId userId, const glm::vec3& position, const glm::vec3& rotation);
+    glm::vec3 ResolveRemotePosition(const glm::vec3& networkPosition, bool isJumping) const;
+    void SetRemoteTarget(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
     void ApplyLocalServerCorrection(ECS::Registry& registry);
     void ReconcileWithRollback(ECS::Registry& registry, const Engine::Net::TransformStatePayload& serverState);
     void InterpolateRemoteTransforms(float deltaTime, ECS::Registry& registry);
