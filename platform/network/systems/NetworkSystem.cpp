@@ -113,6 +113,7 @@ NetworkSystem::NetworkSystem() {
         m_pendingComponentSnapshots.push_back(snapshot);
     };
     callbacks.onMovementAck = [this](const Engine::Net::MovementAckPayload& ack) {
+        std::lock_guard<std::mutex> lock(m_movementAckMutex);
         if (m_pendingMovementAckSignal != nullptr && ack.tick == m_pendingMovementAckTick &&
             ack.userId == m_client.GetUserId()) {
             m_pendingMovementAckSignal->store(true, std::memory_order_release);
@@ -636,6 +637,7 @@ void NetworkSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t ti
 }
 
 void NetworkSystem::ArmMovementAckWait(uint64_t commandTick, std::atomic<bool>* signal) {
+    std::lock_guard<std::mutex> lock(m_movementAckMutex);
     m_pendingMovementAckTick = commandTick;
     m_pendingMovementAckSignal = signal;
     if (signal != nullptr) {
@@ -644,21 +646,28 @@ void NetworkSystem::ArmMovementAckWait(uint64_t commandTick, std::atomic<bool>* 
 }
 
 void NetworkSystem::DisarmMovementAckWait() {
+    std::lock_guard<std::mutex> lock(m_movementAckMutex);
     m_pendingMovementAckSignal = nullptr;
     m_pendingMovementAckTick = 0;
 }
 
 bool NetworkSystem::PollUntilMovementAck(std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (m_pendingMovementAckSignal == nullptr ||
-           !m_pendingMovementAckSignal->load(std::memory_order_acquire)) {
+    while (true) {
+        std::atomic<bool>* signal = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_movementAckMutex);
+            signal = m_pendingMovementAckSignal;
+        }
+        if (signal != nullptr && signal->load(std::memory_order_acquire)) {
+            return true;
+        }
         PollNetwork();
         if (std::chrono::steady_clock::now() >= deadline) {
             return false;
         }
         std::this_thread::yield();
     }
-    return true;
 }
 
 bool NetworkSystem::WaitForMovementAck(uint64_t commandTick, std::chrono::milliseconds timeout) {

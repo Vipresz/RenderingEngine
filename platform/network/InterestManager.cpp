@@ -7,18 +7,26 @@ namespace Platform {
 namespace Networking {
 
 InterestManager::InterestManager(float cellSize, float defaultInterestRadius)
-    : m_cellSize(std::max(cellSize, 1.0f)), m_defaultInterestRadius(std::max(defaultInterestRadius, 1.0f)) {}
+    : m_cellSize((std::max)(cellSize, 1.0f)), m_defaultInterestRadius((std::max)(defaultInterestRadius, 1.0f)) {}
 
 void InterestManager::SetCellSize(float cellSize) {
-    m_cellSize = std::max(cellSize, 1.0f);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const float newSize = (std::max)(cellSize, 1.0f);
+    if (newSize == m_cellSize) {
+        return;
+    }
+    m_cellSize = newSize;
+    RebuildSpatialIndex();
 }
 
 void InterestManager::SetDefaultInterestRadius(float radius) {
-    m_defaultInterestRadius = std::max(radius, 1.0f);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_defaultInterestRadius = (std::max)(radius, 1.0f);
 }
 
 void InterestManager::SetMaxObserversPerBroadcast(size_t maxObservers) {
-    m_maxObserversPerBroadcast = std::max(maxObservers, size_t{1});
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_maxObserversPerBroadcast = (std::max)(maxObservers, size_t{1});
 }
 
 InterestManager::CellKey InterestManager::ToCell(const glm::vec3& position) const {
@@ -27,7 +35,15 @@ InterestManager::CellKey InterestManager::ToCell(const glm::vec3& position) cons
                    static_cast<int>(std::floor(position.z / m_cellSize))};
 }
 
+void InterestManager::RebuildSpatialIndex() {
+    m_cells.clear();
+    for (const auto& entry : m_positions) {
+        m_cells[ToCell(entry.second)].insert(entry.first);
+    }
+}
+
 void InterestManager::UpdateEntity(Engine::Net::UserId userId, const glm::vec3& position) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     const auto existing = m_positions.find(userId);
     if (existing != m_positions.end()) {
         const CellKey oldCell = ToCell(existing->second);
@@ -45,6 +61,7 @@ void InterestManager::UpdateEntity(Engine::Net::UserId userId, const glm::vec3& 
 }
 
 void InterestManager::RemoveEntity(Engine::Net::UserId userId) {
+    std::lock_guard<std::mutex> lock(m_mutex);
     const auto existing = m_positions.find(userId);
     if (existing == m_positions.end()) {
         return;
@@ -61,8 +78,15 @@ void InterestManager::RemoveEntity(Engine::Net::UserId userId) {
     m_positions.erase(existing);
 }
 
+void InterestManager::Clear() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_positions.clear();
+    m_cells.clear();
+}
+
 std::vector<Engine::Net::UserId> InterestManager::QueryNearbyUsers(const glm::vec3& observerPosition,
                                                                    float radius) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::vector<Engine::Net::UserId> result;
     const float radiusSq = radius * radius;
     const int cellRadius = static_cast<int>(std::ceil(radius / m_cellSize));
@@ -98,8 +122,37 @@ std::vector<Engine::Net::UserId> InterestManager::QueryNearbyUsers(const glm::ve
 std::vector<Engine::Net::UserId> InterestManager::GetInterestedObservers(
     Engine::Net::UserId sourceUserId,
     const glm::vec3& sourcePosition) const {
-    std::vector<Engine::Net::UserId> observers = QueryNearbyUsers(sourcePosition, m_defaultInterestRadius);
-    observers.erase(std::remove(observers.begin(), observers.end(), sourceUserId), observers.end());
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Engine::Net::UserId> observers;
+    const float radius = m_defaultInterestRadius;
+    const float radiusSq = radius * radius;
+    const int cellRadius = static_cast<int>(std::ceil(radius / m_cellSize));
+    const CellKey center = ToCell(sourcePosition);
+
+    for (int dx = -cellRadius; dx <= cellRadius; ++dx) {
+        for (int dy = -cellRadius; dy <= cellRadius; ++dy) {
+            for (int dz = -cellRadius; dz <= cellRadius; ++dz) {
+                const CellKey key{center.x + dx, center.y + dy, center.z + dz};
+                const auto cellIt = m_cells.find(key);
+                if (cellIt == m_cells.end()) {
+                    continue;
+                }
+                for (Engine::Net::UserId userId : cellIt->second) {
+                    if (userId == sourceUserId) {
+                        continue;
+                    }
+                    const auto posIt = m_positions.find(userId);
+                    if (posIt == m_positions.end()) {
+                        continue;
+                    }
+                    const glm::vec3 delta = posIt->second - sourcePosition;
+                    if (glm::dot(delta, delta) <= radiusSq) {
+                        observers.push_back(userId);
+                    }
+                }
+            }
+        }
+    }
 
     if (observers.size() <= 1) {
         return observers;
@@ -126,6 +179,7 @@ std::vector<Engine::Net::UserId> InterestManager::GetInterestedObservers(
 }
 
 bool InterestManager::TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3& outPosition) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     const auto it = m_positions.find(userId);
     if (it == m_positions.end()) {
         return false;
@@ -135,6 +189,7 @@ bool InterestManager::TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3
 }
 
 size_t InterestManager::CountUsersInCell(const glm::vec3& position) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     const auto cellIt = m_cells.find(ToCell(position));
     if (cellIt == m_cells.end()) {
         return 0;
@@ -143,9 +198,10 @@ size_t InterestManager::CountUsersInCell(const glm::vec3& position) const {
 }
 
 uint32_t InterestManager::GetMaxCellDensity() const {
+    std::lock_guard<std::mutex> lock(m_mutex);
     uint32_t maxDensity = 0;
     for (const auto& entry : m_cells) {
-        maxDensity = std::max(maxDensity, static_cast<uint32_t>(entry.second.size()));
+        maxDensity = (std::max)(maxDensity, static_cast<uint32_t>(entry.second.size()));
     }
     return maxDensity;
 }

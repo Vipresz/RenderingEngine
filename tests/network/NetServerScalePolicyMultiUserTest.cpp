@@ -113,7 +113,11 @@ protected:
 };
 
 TEST_F(NetServerScalePolicyMultiUserTest, ShardingCapsConcurrentLoginsAtSoftCap) {
+    server.SetOverflowLayerPopulation(128);
+
     std::vector<bool> loginSuccess(static_cast<size_t>(kConcurrentJoinAttempts), false);
+    std::vector<std::unique_ptr<NetClient>> connectedClients;
+    connectedClients.reserve(static_cast<size_t>(kShardSoftCap));
     std::vector<std::thread> workers;
     workers.reserve(static_cast<size_t>(kConcurrentJoinAttempts));
     std::atomic<int> workersReady{0};
@@ -127,14 +131,17 @@ TEST_F(NetServerScalePolicyMultiUserTest, ShardingCapsConcurrentLoginsAtSoftCap)
                 std::this_thread::yield();
             }
 
-            NetClient client;
+            auto client = std::make_unique<NetClient>();
             bool success = false;
-            if (client.Connect(kHost, tcpPort)) {
-                success = client.Login("player_" + std::to_string(index));
+            if (client->Connect(kHost, tcpPort)) {
+                success = client->Login("player_" + std::to_string(index));
             }
 
             std::lock_guard<std::mutex> lock(resultsMutex);
             loginSuccess[static_cast<size_t>(index)] = success;
+            if (success) {
+                connectedClients.push_back(std::move(client));
+            }
         });
     }
 

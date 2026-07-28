@@ -21,6 +21,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -65,8 +66,9 @@ public:
     const Engine::Net::ScalePolicyConfig& GetScalePolicyConfig() const { return m_scalePolicy; }
     void ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config);
     void ApplyLayeringState(bool layeringActive);
-    void SetObservedTickP95Ms(float tickP95Ms) { m_observedTickP95Ms = tickP95Ms; }
-    bool IsLayeringActive() const { return m_layeringActive; }
+    void SetObservedTickP95Ms(float tickP95Ms);
+    float GetObservedTickP95Ms() const;
+    bool IsLayeringActive() const { return m_layeringActive.load(std::memory_order_acquire); }
 
     bool IsRunning() const { return m_running; }
     size_t GetClientCount() const;
@@ -154,6 +156,10 @@ private:
     bool IsShardAtCapacity() const;
     void FillRedirectResponse(Engine::Net::LoginResponsePayload& response) const;
     void SendLayerMigrationRedirect(Engine::Net::UserId userId);
+    size_t CountLoggedInClientsUnlocked() const;
+    static float DecodeTickP95Ms(uint32_t bits);
+    static uint32_t EncodeTickP95Ms(float tickP95Ms);
+    size_t ReplicationQueueMaxDepth() const;
 
     bool SendToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
     bool SendUdpTransformTo(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
@@ -182,6 +188,8 @@ private:
         Engine::Net::UserId observerId = Engine::Net::kInvalidUserId;
     };
 
+    void RequeueFailedTransforms(std::deque<PendingPeerTransform>& failed);
+
     Socket m_listenSocket;
     UdpChannel m_udpChannel;
     InterestManager m_interestManager;
@@ -200,8 +208,8 @@ private:
     Engine::Net::CredentialStore m_credentialStore;
     Engine::Net::ShardConfig m_shardConfig;
     Engine::Net::ScalePolicyConfig m_scalePolicy;
-    bool m_layeringActive = false;
-    float m_observedTickP95Ms = 0.0f;
+    std::atomic<bool> m_layeringActive{false};
+    std::atomic<uint32_t> m_observedTickP95Bits{0};
     TlsConfig m_tlsConfig;
     ClientLoggedInCallback m_clientLoggedInCallback;
     ClientDisconnectedCallback m_clientDisconnectedCallback;

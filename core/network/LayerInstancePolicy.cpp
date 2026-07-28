@@ -47,6 +47,17 @@ LayerLoginAdmission EvaluateLayerLoginAdmission(uint32_t localPlayers,
     return LayerLoginAdmission::RejectFull;
 }
 
+LayerLoginAdmission EvaluateLoginAdmission(uint32_t localPlayers,
+                                           uint32_t overflowLayerPlayers,
+                                           bool hasOverflowTarget,
+                                           const ScalePolicyConfig& policy,
+                                           float tickP95Ms) {
+    if (hasOverflowTarget && policy.ShouldRedirectLogin(localPlayers, tickP95Ms)) {
+        return LayerLoginAdmission::RedirectOverflow;
+    }
+    return EvaluateLayerLoginAdmission(localPlayers, overflowLayerPlayers, hasOverflowTarget, policy);
+}
+
 LayerSplitPlan PlanLayerSplit(uint32_t localPlayers, const ScalePolicyConfig& policy) {
     LayerSplitPlan plan;
     const uint32_t capacity = LayerCapacity(policy);

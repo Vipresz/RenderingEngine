@@ -6,6 +6,7 @@
 
 #include "core/network/SecureCompare.h"
 #include "core/network/ReplicationTier.h"
+#include "core/network/LayerInstancePolicy.h"
 
 #include <chrono>
 
@@ -298,7 +299,7 @@ void NetServer::Stop() {
 
         m_userToEndpoint.clear();
 
-        m_interestManager = InterestManager();
+        m_interestManager.Clear();
 
         m_authority = ServerAuthority();
 
@@ -350,20 +351,58 @@ size_t NetServer::GetLoggedInClientCount() const {
 
     std::lock_guard<std::mutex> lock(m_clientsMutex);
 
+    return CountLoggedInClientsUnlocked();
+
+}
+
+size_t NetServer::CountLoggedInClientsUnlocked() const {
     size_t count = 0;
-
     for (const auto& entry : m_clients) {
-
         if (entry.second && !entry.second->displayName.empty()) {
-
             ++count;
-
         }
+    }
+    return count;
+}
 
+float NetServer::DecodeTickP95Ms(uint32_t bits) {
+    float value = 0.0f;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+uint32_t NetServer::EncodeTickP95Ms(float tickP95Ms) {
+    uint32_t bits = 0;
+    std::memcpy(&bits, &tickP95Ms, sizeof(bits));
+    return bits;
+}
+
+void NetServer::SetObservedTickP95Ms(float tickP95Ms) {
+    m_observedTickP95Bits.store(EncodeTickP95Ms(tickP95Ms), std::memory_order_relaxed);
+}
+
+float NetServer::GetObservedTickP95Ms() const {
+    return DecodeTickP95Ms(m_observedTickP95Bits.load(std::memory_order_relaxed));
+}
+
+size_t NetServer::ReplicationQueueMaxDepth() const {
+    const size_t configured = m_scalePolicy.maxPeerTransformsPerTick;
+    return configured > 0 ? configured : 8192;
+}
+
+void NetServer::RequeueFailedTransforms(std::deque<PendingPeerTransform>& failed) {
+    if (failed.empty()) {
+        return;
     }
 
-    return count;
-
+    std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+    const size_t maxDepth = ReplicationQueueMaxDepth();
+    for (auto it = failed.rbegin(); it != failed.rend(); ++it) {
+        if (m_pendingPeerTransforms.size() >= maxDepth) {
+            break;
+        }
+        m_pendingPeerTransforms.push_front(*it);
+    }
 }
 
 
@@ -504,15 +543,22 @@ size_t NetServer::FlushPendingPeerTransforms(size_t maxSends) {
 
     bool layeringActive = false;
     Engine::Net::EffectiveLayerRadii radii;
+    const Engine::Net::ScalePolicyConfig policySnapshot = m_scalePolicy;
+    uint32_t connectedPlayers = 0;
+    uint32_t cellDensity = 0;
     {
-        std::lock_guard<std::mutex> lock(m_worldMutex);
-        const uint32_t cellDensity = m_interestManager.GetMaxCellDensity();
-        const uint32_t connectedPlayers = static_cast<uint32_t>(GetLoggedInClientCount());
-        layeringActive = m_scalePolicy.IsLayeringActive(connectedPlayers, cellDensity);
-        radii = Engine::Net::ComputeEffectiveRadii(m_scalePolicy, layeringActive);
+        std::lock_guard<std::mutex> clientsLock(m_clientsMutex);
+        connectedPlayers = static_cast<uint32_t>(CountLoggedInClientsUnlocked());
+    }
+    {
+        std::lock_guard<std::mutex> worldLock(m_worldMutex);
+        cellDensity = m_interestManager.GetMaxCellDensity();
+        layeringActive = policySnapshot.IsLayeringActive(connectedPlayers, cellDensity);
+        radii = Engine::Net::ComputeEffectiveRadii(policySnapshot, layeringActive);
     }
 
     size_t sent = 0;
+    std::deque<PendingPeerTransform> failed;
     for (const PendingPeerTransform& pending : batch) {
         if (DeliverTransformToObserver(pending.observerId,
                                        pending.sourceUserId,
@@ -520,8 +566,11 @@ size_t NetServer::FlushPendingPeerTransforms(size_t maxSends) {
                                        layeringActive,
                                        radii)) {
             ++sent;
+        } else {
+            failed.push_back(pending);
         }
     }
+    RequeueFailedTransforms(failed);
     return sent;
 }
 
@@ -549,6 +598,10 @@ void NetServer::EnqueueSelfTransform(Engine::Net::UserId sourceUserId,
     pending.sourceUserId = sourceUserId;
     pending.observerId = sourceUserId;
     std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+    const size_t maxDepth = ReplicationQueueMaxDepth();
+    while (m_pendingSelfTransforms.size() >= maxDepth && !m_pendingSelfTransforms.empty()) {
+        m_pendingSelfTransforms.pop_front();
+    }
     m_pendingSelfTransforms.push_back(std::move(pending));
 }
 
@@ -569,6 +622,7 @@ size_t NetServer::FlushPendingSelfTransforms(size_t maxSends) {
 
     Engine::Net::EffectiveLayerRadii radii;
     size_t sent = 0;
+    std::deque<PendingPeerTransform> failed;
     for (const PendingPeerTransform& pending : batch) {
         if (DeliverTransformToObserver(pending.observerId,
                                        pending.sourceUserId,
@@ -576,6 +630,19 @@ size_t NetServer::FlushPendingSelfTransforms(size_t maxSends) {
                                        false,
                                        radii)) {
             ++sent;
+        } else {
+            failed.push_back(pending);
+        }
+    }
+
+    if (!failed.empty()) {
+        std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+        const size_t maxDepth = ReplicationQueueMaxDepth();
+        for (auto it = failed.rbegin(); it != failed.rend(); ++it) {
+            if (m_pendingSelfTransforms.size() >= maxDepth) {
+                break;
+            }
+            m_pendingSelfTransforms.push_front(*it);
         }
     }
     return sent;
@@ -605,9 +672,13 @@ void NetServer::EnqueueTransformToPeers(const Engine::Net::TransformStatePayload
     }
 
     std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+    const size_t maxDepth = ReplicationQueueMaxDepth();
     for (Engine::Net::UserId observerId : observers) {
         if (observerId == excludeUserId) {
             continue;
+        }
+        while (m_pendingPeerTransforms.size() >= maxDepth && !m_pendingPeerTransforms.empty()) {
+            m_pendingPeerTransforms.pop_front();
         }
         PendingPeerTransform pending;
         pending.transform = transform;
@@ -956,7 +1027,7 @@ void NetServer::ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config)
 }
 
 void NetServer::ApplyLayeringState(bool layeringActive) {
-    m_layeringActive = layeringActive;
+    m_layeringActive.store(layeringActive, std::memory_order_release);
     const size_t observerCap = layeringActive ? m_scalePolicy.observersCapCrowded
                                              : m_scalePolicy.observersCapNormal;
     m_interestManager.SetMaxObserversPerBroadcast(observerCap);
@@ -971,11 +1042,12 @@ bool NetServer::IsShardAtCapacity() const {
 
     const uint32_t players = static_cast<uint32_t>(GetLoggedInClientCount());
     const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
-    const auto admission = Engine::Net::EvaluateLayerLoginAdmission(
+    const auto admission = Engine::Net::EvaluateLoginAdmission(
         players,
         overflowPlayers,
         m_shardConfig.HasOverflowTarget(),
-        m_scalePolicy);
+        m_scalePolicy,
+        GetObservedTickP95Ms());
     return admission == Engine::Net::LayerLoginAdmission::RedirectOverflow ||
            admission == Engine::Net::LayerLoginAdmission::SplitPending ||
            admission == Engine::Net::LayerLoginAdmission::RejectFull;
@@ -1160,43 +1232,6 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
 
 
-            const uint32_t localPlayers = static_cast<uint32_t>(GetLoggedInClientCount());
-            const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
-            const auto admission = Engine::Net::EvaluateLayerLoginAdmission(
-                localPlayers,
-                overflowPlayers,
-                m_shardConfig.HasOverflowTarget(),
-                m_scalePolicy);
-
-            if (admission != Engine::Net::LayerLoginAdmission::AcceptLocal) {
-                Engine::Net::LoginResponsePayload response;
-                response.assignedUserId = userId;
-
-                if (admission == Engine::Net::LayerLoginAdmission::RedirectOverflow) {
-                    FillRedirectResponse(response);
-                } else if (admission == Engine::Net::LayerLoginAdmission::SplitPending) {
-                    response.success = false;
-                    response.redirect = false;
-                    response.message = "split_pending";
-                } else {
-                    response.success = false;
-                    response.redirect = false;
-                    response.message = "shard_full";
-                }
-
-                SendToClient(userId, Engine::Net::MakeMessage(
-                                         Engine::Net::MessageType::LoginResponse,
-                                         response.Serialize(),
-                                         m_sequence++));
-
-                LOG_WARNING_FMT("NetServer",
-                                "Rejected login for user %u (%s)",
-                                userId,
-                                response.message.c_str());
-
-                break;
-            }
-
             if (!m_loginRateLimiter.TryConsume(0)) {
                 m_loginAttemptsDropped.fetch_add(1, std::memory_order_relaxed);
 
@@ -1212,68 +1247,71 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                 break;
             }
 
-
-
             std::string displayName = SanitizeDisplayName(request.displayName);
-
             if (displayName.empty()) {
-
                 displayName = "Player" + std::to_string(userId);
-
             }
-
-
-
-            {
-
-                std::lock_guard<std::mutex> lock(m_clientsMutex);
-
-                auto it = m_clients.find(userId);
-
-                if (it == m_clients.end()) {
-
-                    return;
-
-                }
-
-                it->second->displayName = displayName;
-
-                it->second->udpSessionToken = GenerateSessionToken();
-
-            }
-
-
 
             Engine::Net::LoginResponsePayload response;
-
-            response.success = true;
-
             response.assignedUserId = userId;
-
-            response.message = "ok";
-
-            response.shardId = m_shardConfig.shardId;
+            bool loginAccepted = false;
 
             {
-
                 std::lock_guard<std::mutex> lock(m_clientsMutex);
 
                 auto it = m_clients.find(userId);
-
-                if (it != m_clients.end()) {
-
-                    response.udpSessionToken = it->second->udpSessionToken;
-
+                if (it == m_clients.end()) {
+                    return;
                 }
 
+                const uint32_t localPlayers = static_cast<uint32_t>(CountLoggedInClientsUnlocked());
+                const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
+                const auto admission = Engine::Net::EvaluateLoginAdmission(
+                    localPlayers,
+                    overflowPlayers,
+                    m_shardConfig.HasOverflowTarget(),
+                    m_scalePolicy,
+                    GetObservedTickP95Ms());
+
+                if (admission != Engine::Net::LayerLoginAdmission::AcceptLocal) {
+                    if (admission == Engine::Net::LayerLoginAdmission::RedirectOverflow) {
+                        FillRedirectResponse(response);
+                    } else if (admission == Engine::Net::LayerLoginAdmission::SplitPending) {
+                        response.success = false;
+                        response.redirect = false;
+                        response.message = "split_pending";
+                    } else {
+                        response.success = false;
+                        response.redirect = false;
+                        response.message = "shard_full";
+                    }
+                } else {
+                    it->second->displayName = displayName;
+                    it->second->udpSessionToken = GenerateSessionToken();
+                    loginAccepted = true;
+                    response.success = true;
+                    response.message = "ok";
+                    response.shardId = m_shardConfig.shardId;
+                    response.udpSessionToken = it->second->udpSessionToken;
+                }
+            }
+
+            if (!loginAccepted) {
+                SendToClient(userId, Engine::Net::MakeMessage(
+                                         Engine::Net::MessageType::LoginResponse,
+                                         response.Serialize(),
+                                         m_sequence++));
+
+                LOG_WARNING_FMT("NetServer",
+                                "Rejected login for user %u (%s)",
+                                userId,
+                                response.message.c_str());
+                break;
             }
 
             SendToClient(userId, Engine::Net::MakeMessage(
-
                                      Engine::Net::MessageType::LoginResponse,
-
                                      response.Serialize(),
-
                                      m_sequence++));
 
 

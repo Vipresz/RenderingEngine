@@ -25,6 +25,13 @@ LayerLoginAdmission EvaluateLayerLoginAdmission(uint32_t localPlayers,
                                               bool hasOverflowTarget,
                                               const ScalePolicyConfig& policy);
 
+// Combines soft-cap/tick-pressure redirect (ShouldRedirectLogin) with hard-cap layer admission.
+LayerLoginAdmission EvaluateLoginAdmission(uint32_t localPlayers,
+                                           uint32_t overflowLayerPlayers,
+                                           bool hasOverflowTarget,
+                                           const ScalePolicyConfig& policy,
+                                           float tickP95Ms);
+
 LayerSplitPlan PlanLayerSplit(uint32_t localPlayers, const ScalePolicyConfig& policy);
 
 } // namespace Net

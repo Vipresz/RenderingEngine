@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -19,6 +20,9 @@ class InterestManager {
 public:
     explicit InterestManager(float cellSize = 32.0f, float defaultInterestRadius = 128.0f);
 
+    InterestManager(const InterestManager&) = delete;
+    InterestManager& operator=(const InterestManager&) = delete;
+
     void SetCellSize(float cellSize);
     void SetDefaultInterestRadius(float radius);
     float GetDefaultInterestRadius() const { return m_defaultInterestRadius; }
@@ -29,6 +33,7 @@ public:
 
     void UpdateEntity(Engine::Net::UserId userId, const glm::vec3& position);
     void RemoveEntity(Engine::Net::UserId userId);
+    void Clear();
 
     bool TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3& outPosition) const;
     size_t CountUsersInCell(const glm::vec3& position) const;
@@ -63,6 +68,9 @@ private:
     };
 
     CellKey ToCell(const glm::vec3& position) const;
+    void RebuildSpatialIndex();
+
+    mutable std::mutex m_mutex;
     float m_cellSize = 32.0f;
     float m_defaultInterestRadius = 128.0f;
     size_t m_maxObserversPerBroadcast = 64;

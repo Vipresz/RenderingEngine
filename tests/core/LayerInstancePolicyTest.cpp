@@ -51,3 +51,28 @@ TEST(LayerInstancePolicyTest, RejectsWhenOverflowLayerIsAlsoFull) {
     EXPECT_EQ(Engine::Net::EvaluateLayerLoginAdmission(256, 256, true, policy),
               LayerLoginAdmission::RejectFull);
 }
+
+TEST(LayerInstancePolicyTest, SoftCapRedirectUsesShouldRedirectLogin) {
+    ScalePolicyConfig policy = MakeLayerPolicy();
+    policy.shardSoftCap = 180;
+    policy.shardHardCap = 256;
+    policy.overflowPolicy = Engine::Net::OverflowPolicy::ShardFirst;
+
+    EXPECT_EQ(Engine::Net::EvaluateLoginAdmission(179, 0, true, policy, 0.0f),
+              LayerLoginAdmission::AcceptLocal);
+    EXPECT_EQ(Engine::Net::EvaluateLoginAdmission(180, 0, true, policy, 0.0f),
+              LayerLoginAdmission::RedirectOverflow);
+}
+
+TEST(LayerInstancePolicyTest, TickPressureRedirectBeforeHardCap) {
+    ScalePolicyConfig policy = MakeLayerPolicy();
+    policy.shardSoftCap = 180;
+    policy.shardHardCap = 256;
+    policy.shardTickMsSoftLimit = 12.0f;
+    policy.overflowPolicy = Engine::Net::OverflowPolicy::LayerThenShard;
+
+    EXPECT_EQ(Engine::Net::EvaluateLoginAdmission(180, 0, true, policy, 12.0f),
+              LayerLoginAdmission::RedirectOverflow);
+    EXPECT_EQ(Engine::Net::EvaluateLoginAdmission(180, 0, true, policy, 8.0f),
+              LayerLoginAdmission::AcceptLocal);
+}

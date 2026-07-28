@@ -16,6 +16,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -192,6 +193,7 @@ private:
     uint64_t m_lastSentCommandTick = 0;
     uint64_t m_pendingMovementAckTick = 0;
     std::atomic<bool>* m_pendingMovementAckSignal = nullptr;
+    std::mutex m_movementAckMutex;
 };
 
 } // namespace Systems
