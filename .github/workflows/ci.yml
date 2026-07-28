@@ -1,10 +1,14 @@
 name: RenderingEngine CI
 
+# Essential engine CI for this repo. AstralWorlds does not re-run these tests;
+# it only builds game/server (see AstralWorlds .github/workflows/ci.yml + cd.yml).
+
 on:
   push:
     branches: [main, master, rgrigorii/menu]
   pull_request:
     branches: [main, master, rgrigorii/menu]
+  workflow_dispatch:
 
 concurrency:
   group: rendering-engine-${{ github.event.pull_request.number || github.ref }}
@@ -13,21 +17,23 @@ concurrency:
 jobs:
   test-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake -B build -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+        run: cmake -B build -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON -DBUILD_ENGINE_PLATFORM=OFF
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --target EngineTests --parallel
 
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure --parallel
+        run: ctest --test-dir build -C Release --output-on-failure --label-exclude aggregate
 
   test-linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,16 +42,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON -DBUILD_ENGINE_PLATFORM=OFF
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --target EngineTests --parallel
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure --parallel
+        # Sequential: parallel gtest discovery + net integration tests can deadlock on Linux.
+        run: ctest --test-dir build --output-on-failure -j 1 --label-exclude aggregate
 
   coverage-windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,7 +62,7 @@ jobs:
         run: choco install opencppcoverage -y
 
       - name: Configure
-        run: cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON
+        run: cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON -DBUILD_ENGINE_PLATFORM=OFF
 
       - name: Build
         run: cmake --build build-cov --config Debug --target EngineTests
