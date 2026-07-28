@@ -1,0 +1,25 @@
+﻿Progress & Loading UI assets for RenderingEngine
+================================================
+
+1) kenney_ui-pack/
+   Kenney UI Pack 2.0 (CC0) - panels, buttons, sliders (usable as bar tracks/fills)
+   https://kenney.nl/assets/ui-pack
+
+2) kenney_ui-pack-rpg-expansion/
+   Kenney UI Pack RPG Expansion (CC0) - 9-slice horizontal/vertical progress bars
+   https://kenney.nl/assets/ui-pack-rpg-expansion
+   Progress pieces: barBack_*, barBlue_*, barGreen_*, barRed_*, barYellow_*
+
+3) progress_bars/
+   OpenGameArt health/progress bars (CC0)
+   https://opengameart.org/content/health-bars
+
+4) loading_bar/
+   OpenGameArt loading empty/full/partial frames (CC0)
+   https://opengameart.org/content/loading-bar
+
+5) animated_loading_bar/
+   OpenGameArt animated loading bar spritesheet (CC0)
+   https://opengameart.org/content/animated-loading-bar
+
+All packs above are CC0 / public domain. Credit is appreciated but not required for Kenney assets.

@@ -1,0 +1,4 @@
+﻿Health / Progress Bars
+Author: interglactic (OpenGameArt)
+License: CC0 1.0
+Source: https://opengameart.org/content/health-bars
