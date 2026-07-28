@@ -136,13 +136,25 @@ get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE
 if(NOT EXISTS "${PROJECT_ROOT}/CMakeLists.txt")
     get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 endif()
+
+# Deps resolution (first match wins):
+# 1) Parent DEPS_BASE (e.g. camera_system2/libs)
+# 2) RenderingEngine/libs (git submodules: glm, glfw, glew, assimp)
+# 3) Sibling ../game_libs (legacy local layout)
+get_filename_component(ENGINE_LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs" ABSOLUTE)
 if(DEFINED DEPS_BASE)
     set(GAME_LIBS_DIR "${DEPS_BASE}")
     message(STATUS "Using dependencies directory (from parent): ${GAME_LIBS_DIR}")
+elseif(EXISTS "${ENGINE_LIBS_DIR}/glm-1.0.2/glm/glm.hpp")
+    set(GAME_LIBS_DIR "${ENGINE_LIBS_DIR}")
+    message(STATUS "Using RenderingEngine/libs: ${GAME_LIBS_DIR}")
 else()
     get_filename_component(GAMES_DIR "${PROJECT_ROOT}/.." ABSOLUTE)
     set(GAME_LIBS_DIR "${GAMES_DIR}/game_libs")
     message(STATUS "Using game_libs directory: ${GAME_LIBS_DIR}")
+    if(NOT EXISTS "${GAME_LIBS_DIR}/glm-1.0.2/glm/glm.hpp")
+        message(STATUS "  Tip: init engine deps with: git -C RenderingEngine submodule update --init --recursive")
+    endif()
 endif()
 
 # ============================================================================
@@ -186,29 +198,59 @@ if(USE_HOMEBREW)
         endif()
     endif()
 elseif(WIN32)
-    # Windows: game_libs path, or parent may set GLEW_ROOT (e.g. camera_system after GLEW zip bootstrap)
+    # Windows: parent may set GLEW_ROOT; otherwise use GAME_LIBS_DIR.
+    # The glew git submodule is source-only (no include/lib) — fetch the official win32 zip into the build tree.
     if(NOT GLEW_ROOT)
         set(GLEW_ROOT "${GAME_LIBS_DIR}/glew-2.1.0")
     endif()
-set(GLEW_INCLUDE_DIR "${GLEW_ROOT}/include")
-set(GLEW_LIB_DIR "${GLEW_ROOT}/lib/Release/x64")
-set(GLEW_DLL_DIR "${GLEW_ROOT}/bin/Release/x64")
-
-if(EXISTS "${GLEW_INCLUDE_DIR}/GL/glew.h" AND EXISTS "${GLEW_LIB_DIR}/glew32.lib")
-    target_include_directories(Platform PUBLIC ${GLEW_INCLUDE_DIR})
-    target_link_libraries(Platform PUBLIC "${GLEW_LIB_DIR}/glew32.lib")
-    message(STATUS "Found GLEW: ${GLEW_ROOT}")
-        set(GLEW_FOUND_LOCAL TRUE)
-    
-    # Copy DLL to output directory
-    if(EXISTS "${GLEW_DLL_DIR}/glew32.dll")
-        add_custom_command(TARGET Platform POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GLEW_DLL_DIR}/glew32.dll"
-            "$<TARGET_FILE_DIR:Platform>"
-            COMMENT "Copying GLEW DLL to output directory"
-        )
+    set(_glew_marker "${GLEW_ROOT}/include/GL/glew.h")
+    set(_glew_win_lib "${GLEW_ROOT}/lib/Release/x64/glew32.lib")
+    if(NOT EXISTS "${_glew_marker}" OR NOT EXISTS "${_glew_win_lib}")
+        set(_glew_xdir "${CMAKE_BINARY_DIR}/glew-2.1.0-win32-extract")
+        if(EXISTS "${_glew_xdir}/glew-2.1.0/include/GL/glew.h" AND EXISTS "${_glew_xdir}/glew-2.1.0/lib/Release/x64/glew32.lib")
+            set(GLEW_ROOT "${_glew_xdir}/glew-2.1.0")
+            message(STATUS "Using GLEW win32 release (build cache): ${GLEW_ROOT}")
+        else()
+            set(_glew_zip "${CMAKE_BINARY_DIR}/glew-2.1.0-win32.zip")
+            set(_glew_url "https://github.com/nigels-com/glew/releases/download/glew-2.1.0/glew-2.1.0-win32.zip")
+            if(NOT EXISTS "${_glew_zip}")
+                message(STATUS "Downloading GLEW 2.1.0 Windows release (headers + libs)...")
+                file(DOWNLOAD "${_glew_url}" "${_glew_zip}" TLS_VERIFY ON STATUS _glew_dlst)
+                list(GET _glew_dlst 0 _glew_dlcode)
+                if(NOT _glew_dlcode EQUAL 0)
+                    list(GET _glew_dlst 1 _glew_dlmsg)
+                    message(FATAL_ERROR "GLEW download failed (${_glew_dlmsg}). Get ${_glew_url} manually.")
+                endif()
+            endif()
+            file(REMOVE_RECURSE "${_glew_xdir}")
+            file(MAKE_DIRECTORY "${_glew_xdir}")
+            file(ARCHIVE_EXTRACT INPUT "${_glew_zip}" DESTINATION "${_glew_xdir}")
+            if(EXISTS "${_glew_xdir}/glew-2.1.0/include/GL/glew.h")
+                set(GLEW_ROOT "${_glew_xdir}/glew-2.1.0")
+            else()
+                message(FATAL_ERROR "GLEW zip layout not recognized under ${_glew_xdir}")
+            endif()
+            message(STATUS "Using GLEW win32 release: ${GLEW_ROOT}")
+        endif()
     endif()
+    set(GLEW_INCLUDE_DIR "${GLEW_ROOT}/include")
+    set(GLEW_LIB_DIR "${GLEW_ROOT}/lib/Release/x64")
+    set(GLEW_DLL_DIR "${GLEW_ROOT}/bin/Release/x64")
+
+    if(EXISTS "${GLEW_INCLUDE_DIR}/GL/glew.h" AND EXISTS "${GLEW_LIB_DIR}/glew32.lib")
+        target_include_directories(Platform PUBLIC ${GLEW_INCLUDE_DIR})
+        target_link_libraries(Platform PUBLIC "${GLEW_LIB_DIR}/glew32.lib")
+        message(STATUS "Found GLEW: ${GLEW_ROOT}")
+        set(GLEW_FOUND_LOCAL TRUE)
+
+        if(EXISTS "${GLEW_DLL_DIR}/glew32.dll")
+            add_custom_command(TARGET Platform POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GLEW_DLL_DIR}/glew32.dll"
+                "$<TARGET_FILE_DIR:Platform>"
+                COMMENT "Copying GLEW DLL to output directory"
+            )
+        endif()
     endif()
 elseif(UNIX)
     find_package(GLEW REQUIRED)
@@ -285,15 +327,29 @@ if(USE_HOMEBREW)
         set(GLM_FOUND_LOCAL TRUE)
     endif()
 elseif(WIN32)
-    # Windows: Use game_libs directory
-set(GLM_ROOT "${GAME_LIBS_DIR}/glm-1.0.2")
-set(GLM_INCLUDE_DIR "${GLM_ROOT}")
-
-if(EXISTS "${GLM_INCLUDE_DIR}/glm/glm.hpp")
-    target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
-    message(STATUS "Found GLM: ${GLM_ROOT}")
-        set(GLM_FOUND_LOCAL TRUE)
-    endif()
+    # Windows: game_libs (prefer glm-1.0.2 layout; also accept flat glm/)
+    set(_GLM_CANDIDATES
+        "${GAME_LIBS_DIR}/glm-1.0.2"
+        "${GAME_LIBS_DIR}/glm"
+    )
+    foreach(_glm_root IN LISTS _GLM_CANDIDATES)
+        if(EXISTS "${_glm_root}/glm/glm.hpp")
+            set(GLM_ROOT "${_glm_root}")
+            set(GLM_INCLUDE_DIR "${_glm_root}")
+            target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
+            message(STATUS "Found GLM: ${GLM_ROOT}")
+            set(GLM_FOUND_LOCAL TRUE)
+            break()
+        elseif(EXISTS "${_glm_root}/glm.hpp")
+            # Headers live directly under glm/ — include parent so #include <glm/glm.hpp> works
+            get_filename_component(GLM_INCLUDE_DIR "${_glm_root}" DIRECTORY)
+            set(GLM_ROOT "${_glm_root}")
+            target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
+            message(STATUS "Found GLM (flat): ${GLM_ROOT}")
+            set(GLM_FOUND_LOCAL TRUE)
+            break()
+        endif()
+    endforeach()
 elseif(UNIX)
     find_package(glm CONFIG QUIET)
     if(glm_FOUND)
@@ -312,7 +368,9 @@ elseif(UNIX)
 endif()
 
 if(NOT GLM_FOUND_LOCAL)
-    message(WARNING "GLM not found")
+    message(FATAL_ERROR
+        "GLM not found (expected ${GAME_LIBS_DIR}/glm-1.0.2/glm/glm.hpp).\n"
+        "Init RenderingEngine libs submodules: git -C RenderingEngine submodule update --init --recursive")
 endif()
 
 # Assimp for model loading
