@@ -1,5 +1,6 @@
 #include "render/passes/ShadowRenderPass.h"
 
+#include "Logger.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/TransformComponent.h"
@@ -62,7 +63,13 @@ void ShadowRenderPass::EnsureResources() {
         return;
     }
 
+    m_depthShader.SetWarnOnMissingUniforms(false);
     m_depthShader.CreateFromFiles("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");
+    if (!m_depthShader.IsValid()) {
+        LOG_WARNING("ShadowRenderPass",
+                    "shadow_depth shader failed to load — directional shadows disabled (check shaders/shadow_depth.*)");
+        return;
+    }
 
     glGenTextures(1, &m_shadowDepthTexture);
     glBindTexture(GL_TEXTURE_2D, m_shadowDepthTexture);
@@ -101,9 +108,8 @@ glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context
         }
     }
 
-    const float halfExtent = 45.0f;
-    const float nearPlane = 1.0f;
-    const float farPlane = 200.0f;
+    const float halfExtent = 55.0f;
+    const float zPadding = 25.0f;
     const glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
     const glm::vec3 lightPos = focusCenter - lightDir * 80.0f;
     const glm::mat4 lightView = glm::lookAt(lightPos, focusCenter, up);
@@ -136,8 +142,9 @@ glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context
         maxZ = std::max(maxZ, lightSpace.z);
     }
 
-    const glm::mat4 lightProjection =
-        glm::ortho(minX, maxX, minY, maxY, nearPlane, farPlane);
+    const float zNear = -maxZ - zPadding;
+    const float zFar = -minZ + zPadding;
+    const glm::mat4 lightProjection = glm::ortho(minX, maxX, minY, maxY, zNear, zFar);
     return lightProjection * lightView;
 }
 

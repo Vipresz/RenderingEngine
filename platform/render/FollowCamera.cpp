@@ -88,9 +88,28 @@ void FollowCamera::UpdateCameraPosition() {
     float offsetX = horizontalDistance * sin(yawRad);
     float offsetY = m_distance * sin(pitchRad);
     float offsetZ = horizontalDistance * cos(yawRad);
-    
-    // Position camera relative to head - head stays at center of view
-    m_cameraPosition = headWorldPos + glm::vec3(offsetX, offsetY, offsetZ);
+
+    glm::vec3 offset(offsetX, offsetY, offsetZ);
+    const float desiredDistance = glm::length(offset);
+    glm::vec3 desiredPosition = headWorldPos;
+    if (desiredDistance > 1e-4f) {
+        const glm::vec3 direction = offset / desiredDistance;
+        float allowedDistance = desiredDistance;
+
+        if (m_obstructionQuery) {
+            float hitDistance = desiredDistance;
+            if (m_obstructionQuery->QuerySegment(headWorldPos, headWorldPos + offset, m_targetEntityID,
+                                                 hitDistance)) {
+                allowedDistance = std::min(allowedDistance, hitDistance);
+            }
+        }
+
+        constexpr float kSurfaceSkin = 0.2f;
+        allowedDistance = std::max(m_minDistance, allowedDistance - kSurfaceSkin);
+        desiredPosition = headWorldPos + direction * allowedDistance;
+    }
+
+    m_cameraPosition = desiredPosition;
 }
 
 glm::mat4 FollowCamera::GetViewMatrix() const {

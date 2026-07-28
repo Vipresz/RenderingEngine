@@ -82,6 +82,10 @@ public:
     bool HasHeightmapTerrain() const;
     float GetTerrainWorldSizeX() const { return m_terrainSizeX; }
     float GetTerrainWorldSizeZ() const { return m_terrainSizeZ; }
+
+    // Camera / physics queries (model-local triangle soup built at load time).
+    bool RaycastWorld(const glm::mat4& modelMatrix, const glm::vec3& origin, const glm::vec3& dir,
+                      float maxDistance, float& outDistance) const;
     
     // Get bone name by mesh bone index (for bone remapping)
     // Returns empty string if bone index is invalid
@@ -140,6 +144,15 @@ private:
     std::vector<float> m_heightGrid;
     int m_heightGridW = 0, m_heightGridH = 0;
     float m_terrainSizeX = 0.0f, m_terrainSizeZ = 0.0f, m_terrainHeightScale = 0.0f;
+
+    std::vector<glm::vec3> m_collisionTriangles;
+
+    void AppendCollisionTriangles(const GLfloat* vertices, const unsigned int* indices,
+                                  unsigned int numVertices, unsigned int numIndices);
+    bool RaycastLocal(const glm::vec3& origin, const glm::vec3& dir, float maxDistance,
+                      float& outDistance) const;
+    bool RaycastHeightmap(const glm::vec3& localOrigin, const glm::vec3& localDir, float maxDistance,
+                          float& outDistance) const;
     
     void CalculateBounds(const aiScene* scene);
 };

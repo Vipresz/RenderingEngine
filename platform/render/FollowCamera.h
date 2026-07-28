@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include "render/ICameraSource.h"
+#include "render/ICameraObstructionQuery.h"
 #include "render/components/TransformComponent.h"
 #include "core/Types.h"
 
@@ -41,6 +42,7 @@ public:
     void SetMaxDistance(float maxDist) { m_maxDistance = maxDist; } // Farthest (very far)
     void SetRotationSpeed(float speed) { m_rotationSpeed = speed; }
     void SetZoomSpeed(float speed) { m_zoomSpeed = speed; }
+    void SetObstructionQuery(ICameraObstructionQuery* query) { m_obstructionQuery = query; }
     
     // Get current camera values
     float GetDistance() const { return m_distance; }
@@ -75,6 +77,8 @@ private:
     float m_maxDistance;    // Maximum distance (very far)
     float m_rotationSpeed;  // Mouse sensitivity for rotation
     float m_zoomSpeed;      // Scroll wheel sensitivity
+
+    ICameraObstructionQuery* m_obstructionQuery = nullptr;
     
     void UpdateCameraPosition();
 };

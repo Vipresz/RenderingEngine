@@ -45,6 +45,9 @@ public:
     
     void UseShader();
     void ClearShader();
+
+    // Depth-only / UI shaders omit lit-mesh uniforms; suppress missing-uniform warnings for those.
+    void SetWarnOnMissingUniforms(bool warn) { m_warnOnMissingUniforms = warn; }
     
     ~Shader();
 
@@ -59,7 +62,12 @@ private:
     GLint uniformTexture;
     GLint uniformUseTexture;
     GLint uniformDirectionalLightTransform;
-    bool uniformLocationsResolved;
+    bool uniformLocationsResolved = false;
+    bool m_warnOnMissingUniforms = true;
+    bool m_warnedUseTexture = false;
+    bool m_warnedProjection = false;
+    bool m_warnedView = false;
+    bool m_warnedModel = false;
     
     void CompileShader(const char* vertexCode, const char* fragmentCode);
     void CompileShader(const char* vertexCode, const char* geometryCode, const char* fragmentCode);

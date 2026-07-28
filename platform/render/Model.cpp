@@ -1,5 +1,6 @@
 #include "render/Model.h"
 #include "render/MeshAssetResolve.h"
+#include "render/Raycast.h"
 #include "Logger.h"
 #include "stb_image.h"
 #include <assimp/config.h>
@@ -287,6 +288,8 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
                            vertexCount, 
                            static_cast<unsigned int>(indices.size()));
     }
+    AppendCollisionTriangles(&vertices[0], indices.data(), vertexCount,
+                             static_cast<unsigned int>(indices.size()));
     m_meshList.push_back(newMesh);
     m_meshToTex.push_back(mesh->mMaterialIndex);
 }
@@ -679,6 +682,7 @@ void Model::ClearModel() {
     m_heightGrid.clear();
     m_heightGridW = m_heightGridH = 0;
     m_terrainSizeX = m_terrainSizeZ = m_terrainHeightScale = 0.0f;
+    m_collisionTriangles.clear();
 }
 
 void Model::CreatePlane(float sizeX, float sizeZ) {
@@ -709,6 +713,7 @@ void Model::CreatePlane(float sizeX, float sizeZ) {
     // Create the mesh (4 vertices, 6 indices)
     Mesh* planeMesh = new Mesh();
     planeMesh->CreateMesh(vertices, indices, 4, 6);
+    AppendCollisionTriangles(vertices, indices, 4, 6);
     
     m_meshList.push_back(planeMesh);
     m_meshToTex.push_back(0); // Use texture index 0
@@ -861,6 +866,7 @@ bool Model::CreateFromHeightmap(const std::string& imagePath, float sizeX, float
     terrainMesh->CreateMesh(vertices.data(), indices.data(),
         static_cast<unsigned int>(vertices.size() / 8),
         static_cast<unsigned int>(indices.size()));
+    // Heightmap uses analytic RaycastHeightmap — do not build multi-million-triangle soup.
     terrainMesh->SetVertexColors(vertexColors.data(), static_cast<unsigned int>(vertexColors.size() / 3));
     
     m_meshList.push_back(terrainMesh);
@@ -997,9 +1003,12 @@ void Model::CreateSphere(float radius, unsigned int segments) {
     
     // Create the mesh (vertices.size() = 8 floats per vertex)
     Mesh* sphereMesh = new Mesh();
-    sphereMesh->CreateMesh(vertices.data(), indices.data(), 
-                          static_cast<unsigned int>(vertices.size() / 8), 
-                          static_cast<unsigned int>(indices.size()));
+    sphereMesh->CreateMesh(vertices.data(), indices.data(),
+        static_cast<unsigned int>(vertices.size() / 8),
+        static_cast<unsigned int>(indices.size()));
+    AppendCollisionTriangles(vertices.data(), indices.data(),
+                             static_cast<unsigned int>(vertices.size() / 8),
+                             static_cast<unsigned int>(indices.size()));
     
     m_meshList.push_back(sphereMesh);
     m_meshToTex.push_back(0);
@@ -1214,6 +1223,140 @@ void Model::ApplyRainbowColors(float minZ, float maxZ) {
 
 Model::~Model() {
     ClearModel();
+}
+
+void Model::AppendCollisionTriangles(const GLfloat* vertices, const unsigned int* indices,
+                                     unsigned int numVertices, unsigned int numIndices) {
+    if (!vertices || !indices || numVertices == 0 || numIndices < 3) {
+        return;
+    }
+
+    // Guard against accidental huge soups (e.g. high-res heightmaps).
+    constexpr size_t kMaxCollisionTriangles = 50000;
+    const size_t incomingTriangles = numIndices / 3;
+    if (m_collisionTriangles.size() / 3 + incomingTriangles > kMaxCollisionTriangles) {
+        return;
+    }
+
+    constexpr unsigned int kFloatsPerVertex = 8;
+    for (unsigned int tri = 0; tri + 2 < numIndices; tri += 3) {
+        for (unsigned int corner = 0; corner < 3; ++corner) {
+            const unsigned int vertexIndex = indices[tri + corner];
+            if (vertexIndex >= numVertices) {
+                continue;
+            }
+            const unsigned int base = vertexIndex * kFloatsPerVertex;
+            m_collisionTriangles.emplace_back(vertices[base + 0], vertices[base + 1], vertices[base + 2]);
+        }
+    }
+}
+
+bool Model::RaycastLocal(const glm::vec3& origin, const glm::vec3& dir, float maxDistance,
+                         float& outDistance) const {
+    if (m_collisionTriangles.empty() || maxDistance <= 0.0f) {
+        return false;
+    }
+
+    bool hit = false;
+    float closest = maxDistance;
+    for (size_t tri = 0; tri + 2 < m_collisionTriangles.size(); tri += 3) {
+        float t = 0.0f;
+        if (Raycast::IntersectTriangle(origin, dir, m_collisionTriangles[tri], m_collisionTriangles[tri + 1],
+                                       m_collisionTriangles[tri + 2], t)) {
+            if (t >= 0.0f && t < closest) {
+                closest = t;
+                hit = true;
+            }
+        }
+    }
+
+    if (!hit) {
+        return false;
+    }
+
+    outDistance = closest;
+    return true;
+}
+
+bool Model::RaycastHeightmap(const glm::vec3& localOrigin, const glm::vec3& localDir, float maxDistance,
+                             float& outDistance) const {
+    if (!HasHeightmapTerrain() || maxDistance <= 0.0f) {
+        return false;
+    }
+
+    const float dirLen = glm::length(localDir);
+    if (dirLen < 1e-6f) {
+        return false;
+    }
+    const glm::vec3 dir = localDir / dirLen;
+
+    const float stepX =
+        (m_heightGridH > 1) ? m_terrainSizeX / static_cast<float>(m_heightGridH - 1) : 1.0f;
+    const float stepZ =
+        (m_heightGridW > 1) ? m_terrainSizeZ / static_cast<float>(m_heightGridW - 1) : 1.0f;
+    const float step = std::max(0.2f, std::min(stepX, stepZ) * 0.5f);
+
+    constexpr float kSurfaceSkin = 0.15f;
+    for (float t = 0.0f; t <= maxDistance; t += step) {
+        const glm::vec3 point = localOrigin + dir * t;
+        const float terrainHeight = GetHeightAt(point.x, point.z);
+        if (point.y <= terrainHeight + kSurfaceSkin) {
+            outDistance = t;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool Model::RaycastWorld(const glm::mat4& modelMatrix, const glm::vec3& origin, const glm::vec3& dir,
+                         float maxDistance, float& outDistance) const {
+    if (maxDistance <= 0.0f || m_collisionTriangles.empty()) {
+        return false;
+    }
+
+    const glm::mat4 inverseModel = glm::inverse(modelMatrix);
+    const glm::vec3 localOrigin = glm::vec3(inverseModel * glm::vec4(origin, 1.0f));
+    const glm::vec3 worldEnd = origin + dir * maxDistance;
+    const glm::vec3 localEnd = glm::vec3(inverseModel * glm::vec4(worldEnd, 1.0f));
+    const glm::vec3 localSegment = localEnd - localOrigin;
+    const float localMaxDistance = glm::length(localSegment);
+    if (localMaxDistance <= 1e-5f) {
+        return false;
+    }
+
+    const glm::vec3 localDir = localSegment / localMaxDistance;
+
+    if (HasHeightmapTerrain()) {
+        float localHitDistance = 0.0f;
+        if (!RaycastHeightmap(localOrigin, localDir, localMaxDistance, localHitDistance)) {
+            return false;
+        }
+
+        const glm::vec3 worldHit =
+            glm::vec3(modelMatrix * glm::vec4(localOrigin + localDir * localHitDistance, 1.0f));
+        const float worldDistance = glm::dot(worldHit - origin, dir);
+        if (worldDistance < 0.0f || worldDistance > maxDistance) {
+            return false;
+        }
+
+        outDistance = worldDistance;
+        return true;
+    }
+
+    float localHitDistance = 0.0f;
+    if (!RaycastLocal(localOrigin, localDir, localMaxDistance, localHitDistance)) {
+        return false;
+    }
+
+    const glm::vec3 worldHit = glm::vec3(modelMatrix * glm::vec4(localOrigin + localDir * localHitDistance, 1.0f));
+    const float worldDistance = glm::dot(worldHit - origin, dir);
+    if (worldDistance < 0.0f || worldDistance > maxDistance) {
+        return false;
+    }
+
+    outDistance = worldDistance;
+    return true;
 }
 
 } // namespace Render

@@ -1,5 +1,6 @@
 #include "render/passes/OpaqueRenderPass.h"
 
+#include "Logger.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/MeshComponent.h"
@@ -60,8 +61,15 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
     const GLint uniformView = context.shader->GetViewLocation();
     const GLint uniformProjection = context.shader->GetProjectionLocation();
     const GLint uniformEyePosition = context.shader->GetEyePositionLocation();
+    const GLuint shaderProgramID = context.shader->GetShaderID();
 
     if (uniformView == -1 || uniformProjection == -1) {
+        static bool loggedMissingCameraUniforms = false;
+        if (!loggedMissingCameraUniforms) {
+            loggedMissingCameraUniforms = true;
+            LOG_ERROR("OpaqueRenderPass",
+                        "Lit shader missing view/projection uniforms — opaque meshes will not render");
+        }
         return;
     }
 
@@ -71,7 +79,17 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
         glUniform3f(uniformEyePosition, eyePos.x, eyePos.y, eyePos.z);
     }
 
-    const GLuint shaderProgramID = context.shader->GetShaderID();
+    context.shader->SetDirectionalLightTransform(&context.directionalLightTransform);
+
+    if (context.shadowMapTexture != 0) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, context.shadowMapTexture);
+        const GLint uniformShadowMap = glGetUniformLocation(shaderProgramID, "directionalShadowMap");
+        if (uniformShadowMap != -1) {
+            glUniform1i(uniformShadowMap, 0);
+        }
+    }
+
     const GLint uniformPointLightCount = glGetUniformLocation(shaderProgramID, "pointLightCount");
     const GLint uniformSpotLightCount = glGetUniformLocation(shaderProgramID, "spotLightCount");
     const GLint uniformDirectionalLightColour = glGetUniformLocation(shaderProgramID, "directionalLight.base.colour");

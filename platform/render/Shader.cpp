@@ -9,15 +9,15 @@ namespace Render {
 
 Shader::Shader() {
     shaderID = 0;
-    uniformModel = 0;
-    uniformProjection = 0;
-    uniformView = 0;
-    uniformEyePosition = 0;
-    uniformSpecularIntensity = 0;
-    uniformShininess = 0;
-    uniformTexture = 0;
+    uniformModel = -1;
+    uniformProjection = -1;
+    uniformView = -1;
+    uniformEyePosition = -1;
+    uniformSpecularIntensity = -1;
+    uniformShininess = -1;
+    uniformTexture = -1;
     uniformUseTexture = -1;
-    uniformDirectionalLightTransform = 0;
+    uniformDirectionalLightTransform = -1;
     uniformLocationsResolved = false;
 }
 
@@ -165,17 +165,23 @@ void Shader::ResolveUniformLocations() {
     uniformDirectionalLightTransform = glGetUniformLocation(shaderID, "directionalLightTransform");
     uniformLocationsResolved = true;
 
-    if (uniformUseTexture == -1) {
-        printf("Warning: Uniform 'useTexture' not found in shader — mesh textures may not render.\n");
-    }
-    if (uniformProjection == -1) {
-        printf("Warning: Uniform 'projection' not found in shader (might be unused)\n");
-    }
-    if (uniformView == -1) {
-        printf("Warning: Uniform 'view' not found in shader (might be unused)\n");
-    }
-    if (uniformModel == -1) {
-        printf("Warning: Uniform 'model' not found in shader (might be unused)\n");
+    if (m_warnOnMissingUniforms) {
+        if (uniformUseTexture == -1 && !m_warnedUseTexture) {
+            m_warnedUseTexture = true;
+            printf("Warning: Uniform 'useTexture' not found in shader — mesh textures may not render.\n");
+        }
+        if (uniformProjection == -1 && !m_warnedProjection) {
+            m_warnedProjection = true;
+            printf("Warning: Uniform 'projection' not found in shader (might be unused)\n");
+        }
+        if (uniformView == -1 && !m_warnedView) {
+            m_warnedView = true;
+            printf("Warning: Uniform 'view' not found in shader (might be unused)\n");
+        }
+        if (uniformModel == -1 && !m_warnedModel) {
+            m_warnedModel = true;
+            printf("Warning: Uniform 'model' not found in shader (might be unused)\n");
+        }
     }
 }
 
@@ -241,11 +247,6 @@ void Shader::UseShader() {
     }
     
     glUseProgram(shaderID);
-
-    // Some drivers only expose active uniform locations after the program is bound once.
-    if (!uniformLocationsResolved || uniformProjection == -1 || uniformView == -1) {
-        ResolveUniformLocations();
-    }
     
     // Check for OpenGL errors after glUseProgram
     // Note: glUseProgram itself rarely generates errors if the program is valid
@@ -269,11 +270,15 @@ void Shader::ClearShader() {
         shaderID = 0;
     }
     
-    uniformModel = 0;
-    uniformProjection = 0;
-    uniformView = 0;
+    uniformModel = -1;
+    uniformProjection = -1;
+    uniformView = -1;
     uniformUseTexture = -1;
     uniformLocationsResolved = false;
+    m_warnedUseTexture = false;
+    m_warnedProjection = false;
+    m_warnedView = false;
+    m_warnedModel = false;
 }
 
 bool Shader::AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderType) {
