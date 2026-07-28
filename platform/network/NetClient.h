@@ -26,6 +26,7 @@ struct ClientCallbacks {
     std::function<void(NetUserId, const std::string&)> onPeerJoined;
     std::function<void(NetUserId)> onPeerLeft;
     std::function<void(const ::Engine::Net::TransformStatePayload&)> onTransformState;
+    std::function<void(const ::Engine::Net::MovementAckPayload&)> onMovementAck;
     std::function<void(const ::Engine::Net::GenericDataPayload&)> onGenericData;
     std::function<void(const ::Engine::Net::WorldSnapshotPayload&)> onWorldSnapshot;
     std::function<void(const ::Engine::Net::EntitySnapshot&)> onEntitySnapshot;

@@ -1,5 +1,8 @@
 # Runs the 100-player concurrent join latency engine test and writes a timestamped log.
 #
+# For multi-scale stress profiling (64 / 256 / 1048 players), use:
+#   .\scripts\run_join_load_stress_profile.ps1
+#
 # Usage:
 #   .\scripts\run_join_load_test.ps1
 #   .\scripts\run_join_load_test.ps1 -Build
@@ -18,7 +21,9 @@ param(
 
     [double] $MaxP95Ms = 0,
 
-    [double] $MaxMovementP95Ms = 0
+    [double] $MaxMovementP95Ms = 0,
+
+    [string] $ScaleConfig = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -116,6 +121,15 @@ if (-not $engineTests) {
 $resolvedBuildDir = Resolve-BuildDirectory -Root $EngineRoot -PreferredBuildDir $BuildDir -EngineTestsPath $engineTests
 $filter = "AuthoritativeServerFixture.HundredPlayerConcurrentJoinLatency"
 
+if ($ScaleConfig) {
+    $resolvedScaleConfig = $ScaleConfig
+} else {
+    $resolvedScaleConfig = Join-Path $EngineRoot "config\join_load_scale.json"
+}
+if (-not (Test-Path $resolvedScaleConfig)) {
+    throw "Scale config not found: $resolvedScaleConfig"
+}
+
 $header = @(
     "AstralWorlds / RenderingEngine - 100-player join load test"
     "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
@@ -124,6 +138,7 @@ $header = @(
     "Config: $Config"
     "Executable: $engineTests"
     "Filter: $filter"
+    "JOIN_LOAD_SCALE_CONFIG: $resolvedScaleConfig"
     "JOIN_LOAD_MAX_P95_MS: $(if ($MaxP95Ms -gt 0) { $MaxP95Ms } else { '(not set)' })"
     "JOIN_LOAD_MAX_MOVEMENT_P95_MS: $(if ($MaxMovementP95Ms -gt 0) { $MaxMovementP95Ms } else { '(not set)' })"
     ""
@@ -135,9 +150,11 @@ Write-Host "Logging to $logPath"
 $previousJoinLoad = $env:ENGINE_RUN_JOIN_LOAD_TEST
 $previousMaxP95 = $env:JOIN_LOAD_MAX_P95_MS
 $previousMovementP95 = $env:JOIN_LOAD_MAX_MOVEMENT_P95_MS
+$previousScaleConfig = $env:JOIN_LOAD_SCALE_CONFIG
 
 try {
     $env:ENGINE_RUN_JOIN_LOAD_TEST = "1"
+    $env:JOIN_LOAD_SCALE_CONFIG = (Resolve-Path $resolvedScaleConfig).Path
     if ($MaxP95Ms -gt 0) {
         $env:JOIN_LOAD_MAX_P95_MS = [string]$MaxP95Ms
     } else {
@@ -167,6 +184,10 @@ try {
 
     $output | ForEach-Object { Write-Host $_ }
 
+    $configLine = $output | Where-Object { $_ -match '^\[JoinLoadConfig\]' } | Select-Object -Last 1
+    if ($configLine) {
+        Write-Host "Config summary: $configLine"
+    }
     $joinLine = $output | Where-Object { $_ -match '^\[JoinLoad\]' } | Select-Object -Last 1
     $serverLine = $output | Where-Object { $_ -match '^\[ServerLoad\]' } | Select-Object -Last 1
     if ($joinLine) {
@@ -205,5 +226,10 @@ finally {
         $env:JOIN_LOAD_MAX_MOVEMENT_P95_MS = $previousMovementP95
     } else {
         Remove-Item Env:JOIN_LOAD_MAX_MOVEMENT_P95_MS -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $previousScaleConfig) {
+        $env:JOIN_LOAD_SCALE_CONFIG = $previousScaleConfig
+    } else {
+        Remove-Item Env:JOIN_LOAD_SCALE_CONFIG -ErrorAction SilentlyContinue
     }
 }

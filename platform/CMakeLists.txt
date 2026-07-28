@@ -43,6 +43,9 @@ set(PLATFORM_SOURCES
     ../core/network/CharacterMovementSimulator.cpp
     ../core/network/PasswordHasher.cpp
     ../core/network/CredentialStore.cpp
+    ../core/network/ScalePolicyConfig.cpp
+    ../core/network/ReplicationTier.cpp
+    ../core/network/ZoneScaleConfig.cpp
     ../core/terrain/HeightmapTerrain.cpp
     ../core/terrain/HeightmapTerrainImage.cpp
     physics/SimplePhysicsWorld.cpp

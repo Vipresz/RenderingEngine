@@ -212,6 +212,13 @@ void UdpChannel::HandleDatagram(const uint8_t* data,
             }
             break;
         }
+        case Engine::Net::MessageType::MovementAck: {
+            Engine::Net::MovementAckPayload ack;
+            if (Engine::Net::MovementAckPayload::Deserialize(payload, ack) && m_movementAckHandler) {
+                m_movementAckHandler(ack, context);
+            }
+            break;
+        }
         default:
             break;
     }

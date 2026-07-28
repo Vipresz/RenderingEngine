@@ -25,9 +25,14 @@ public:
 
     void SetMaxObserversPerBroadcast(size_t maxObservers);
     size_t GetMaxObserversPerBroadcast() const { return m_maxObserversPerBroadcast; }
+    float GetCellSize() const { return m_cellSize; }
 
     void UpdateEntity(Engine::Net::UserId userId, const glm::vec3& position);
     void RemoveEntity(Engine::Net::UserId userId);
+
+    bool TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3& outPosition) const;
+    size_t CountUsersInCell(const glm::vec3& position) const;
+    uint32_t GetMaxCellDensity() const;
 
     // Returns user IDs that should receive updates about `sourceUserId` from `sourcePosition`.
     std::vector<Engine::Net::UserId> GetInterestedObservers(Engine::Net::UserId sourceUserId,

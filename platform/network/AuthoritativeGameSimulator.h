@@ -84,6 +84,7 @@ private:
     void SpawnPlayer(Engine::Net::UserId userId, const std::string& displayName);
     void DespawnPlayer(Engine::Net::UserId userId);
     void ApplyMovement(Engine::Net::UserId userId, Engine::Net::MovementCommand command);
+    bool ApplyMovementSimulation(Engine::Net::UserId userId, Engine::Net::MovementCommand& command);
     void ApplyLoadout(Engine::Net::UserId userId, Engine::Net::ReplicatedLoadout loadout);
     void RegisterLoadoutBinding();
     void BroadcastAuthoritativeTransform(Engine::Net::UserId userId,
@@ -91,11 +92,15 @@ private:
                                          uint64_t tick);
     void SendWorldSnapshotTo(Engine::Net::UserId userId, uint64_t tick);
     void UpdatePeerVisibility(Engine::Net::UserId observerId, const glm::vec3& observerPosition);
+    void EnqueueDeferredVisibilityUpdate(Engine::Net::UserId observerId);
+    void ProcessDeferredVisibilityUpdates();
     void NotifyInterestedPeersOfSpawn(Engine::Net::UserId userId,
                                       const glm::vec3& spawnPosition,
                                       const std::string& displayName,
                                       const Engine::Net::TransformStatePayload& spawnTransform);
     glm::vec3 ComputeSpawnPosition(size_t spawnIndex) const;
+    void RefreshScalePolicy();
+    static float ComputeP95(const std::deque<float>& samples);
     Engine::Net::TransformStatePayload BuildTransformPayload(Engine::Net::UserId userId,
                                                              const PlayerState& player,
                                                              uint64_t tick) const;
@@ -117,13 +122,17 @@ private:
     uint32_t m_tickMovementCommandsProcessed = 0;
     uint32_t m_tickDirtySnapshotsSent = 0;
     uint32_t m_tickVisibilityEvents = 0;
+    uint32_t m_tickPeerTransformsSent = 0;
     size_t m_nextSpawnIndex = 0;
+    std::deque<float> m_tickMsHistory;
 
     std::mutex m_queueMutex;
     std::deque<PendingLogin> m_pendingLogins;
     std::deque<Engine::Net::UserId> m_pendingDisconnects;
     std::deque<PendingCommand> m_pendingCommands;
     std::deque<PendingLoadout> m_pendingLoadouts;
+    std::deque<Engine::Net::UserId> m_deferredVisibilityUpdates;
+    std::unordered_set<Engine::Net::UserId> m_deferredVisibilityPending;
 };
 
 } // namespace Networking

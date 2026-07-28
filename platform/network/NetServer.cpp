@@ -5,8 +5,7 @@
 #include "Logger.h"
 
 #include "core/network/SecureCompare.h"
-
-
+#include "core/network/ReplicationTier.h"
 
 #include <chrono>
 
@@ -280,6 +279,11 @@ void NetServer::Stop() {
 
     m_running = false;
 
+    {
+        std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+        m_pendingPeerTransforms.clear();
+    }
+
     m_listenSocket.Close();
 
     m_udpChannel.Close();
@@ -442,50 +446,174 @@ bool NetServer::SendPacketToClient(Engine::Net::UserId userId, const Engine::Net
 
 
 
+bool NetServer::DeliverTransformToObserver(Engine::Net::UserId observerId,
+                                           Engine::Net::UserId sourceUserId,
+                                           const Engine::Net::TransformStatePayload& transform,
+                                           bool layeringActive,
+                                           const Engine::Net::EffectiveLayerRadii& radii) {
+    Engine::Net::TransformStatePayload outgoing = transform;
+    if (layeringActive && observerId != sourceUserId) {
+        glm::vec3 observerPosition = transform.position;
+        {
+            std::lock_guard<std::mutex> lock(m_worldMutex);
+            if (!m_interestManager.TryGetEntityPosition(observerId, observerPosition)) {
+                observerPosition = transform.position;
+            }
+        }
+        const glm::vec3 delta = transform.position - observerPosition;
+        const Engine::Net::ReplicationTier tier =
+            Engine::Net::ClassifyReplicationTier(glm::dot(delta, delta), radii);
+        if (tier == Engine::Net::ReplicationTier::Hidden) {
+            return false;
+        }
+        outgoing = Engine::Net::ReduceTransformForTier(transform, tier);
+    }
+
+    if (!SendUdpTransformTo(observerId, outgoing)) {
+        return SendToClient(observerId, Engine::Net::MakeMessage(
+                                         Engine::Net::MessageType::TransformState,
+                                         outgoing.Serialize(),
+                                         m_sequence++));
+    }
+    return true;
+}
+
+size_t NetServer::GetReplicationQueueDepth() const {
+    std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+    return m_pendingPeerTransforms.size();
+}
+
+size_t NetServer::FlushPendingPeerTransforms(size_t maxSends) {
+    if (maxSends == 0) {
+        return 0;
+    }
+
+    std::vector<PendingPeerTransform> batch;
+    batch.reserve(maxSends);
+    {
+        std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+        while (!m_pendingPeerTransforms.empty() && batch.size() < maxSends) {
+            batch.push_back(std::move(m_pendingPeerTransforms.front()));
+            m_pendingPeerTransforms.pop_front();
+        }
+    }
+
+    if (batch.empty()) {
+        return 0;
+    }
+
+    bool layeringActive = false;
+    Engine::Net::EffectiveLayerRadii radii;
+    {
+        std::lock_guard<std::mutex> lock(m_worldMutex);
+        const uint32_t cellDensity = m_interestManager.GetMaxCellDensity();
+        layeringActive = m_scalePolicy.IsLayeringActive(cellDensity);
+        radii = Engine::Net::ComputeEffectiveRadii(m_scalePolicy, layeringActive);
+    }
+
+    size_t sent = 0;
+    for (const PendingPeerTransform& pending : batch) {
+        if (DeliverTransformToObserver(pending.observerId,
+                                       pending.sourceUserId,
+                                       pending.transform,
+                                       layeringActive,
+                                       radii)) {
+            ++sent;
+        }
+    }
+    return sent;
+}
+
 void NetServer::SendTransformToInterested(const Engine::Net::TransformStatePayload& transform,
 
                                             Engine::Net::UserId sourceUserId,
 
                                             Engine::Net::UserId excludeUserId) {
+    if (sourceUserId != excludeUserId) {
+        SendAuthoritativeSelfTransform(sourceUserId, transform);
+    }
+    EnqueueTransformToPeers(transform, sourceUserId, excludeUserId);
+}
 
-    std::vector<Engine::Net::UserId> observers;
+bool NetServer::SendAuthoritativeSelfTransform(Engine::Net::UserId sourceUserId,
+                                               const Engine::Net::TransformStatePayload& transform) {
+    Engine::Net::EffectiveLayerRadii radii;
+    return DeliverTransformToObserver(sourceUserId, sourceUserId, transform, false, radii);
+}
 
+void NetServer::EnqueueSelfTransform(Engine::Net::UserId sourceUserId,
+                                     const Engine::Net::TransformStatePayload& transform) {
+    PendingPeerTransform pending;
+    pending.transform = transform;
+    pending.sourceUserId = sourceUserId;
+    pending.observerId = sourceUserId;
+    std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+    m_pendingSelfTransforms.push_back(std::move(pending));
+}
+
+size_t NetServer::FlushPendingSelfTransforms(size_t maxSends) {
+    if (maxSends == 0) {
+        return 0;
+    }
+
+    std::vector<PendingPeerTransform> batch;
+    batch.reserve(maxSends);
     {
+        std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
+        while (!m_pendingSelfTransforms.empty() && batch.size() < maxSends) {
+            batch.push_back(std::move(m_pendingSelfTransforms.front()));
+            m_pendingSelfTransforms.pop_front();
+        }
+    }
 
+    Engine::Net::EffectiveLayerRadii radii;
+    size_t sent = 0;
+    for (const PendingPeerTransform& pending : batch) {
+        if (DeliverTransformToObserver(pending.observerId,
+                                       pending.sourceUserId,
+                                       pending.transform,
+                                       false,
+                                       radii)) {
+            ++sent;
+        }
+    }
+    return sent;
+}
+
+bool NetServer::SendMovementAck(Engine::Net::UserId userId, uint64_t tick) {
+    Engine::Net::MovementAckPayload ack;
+    ack.userId = userId;
+    ack.tick = tick;
+    const Engine::Net::NetBuffer payload = ack.Serialize();
+
+    if (SendUdpPayloadTo(userId, Engine::Net::MessageType::MovementAck, payload)) {
+        return true;
+    }
+
+    return SendToClient(userId, Engine::Net::MakeMessage(
+                                   Engine::Net::MessageType::MovementAck, payload, m_sequence++));
+}
+
+void NetServer::EnqueueTransformToPeers(const Engine::Net::TransformStatePayload& transform,
+                                        Engine::Net::UserId sourceUserId,
+                                        Engine::Net::UserId excludeUserId) {
+    std::vector<Engine::Net::UserId> observers;
+    {
         std::lock_guard<std::mutex> lock(m_worldMutex);
-
         observers = m_interestManager.GetInterestedObservers(sourceUserId, transform.position);
-
     }
 
-
-
-    observers.push_back(sourceUserId);
-    std::sort(observers.begin(), observers.end());
-    observers.erase(std::unique(observers.begin(), observers.end()), observers.end());
-
+    std::lock_guard<std::mutex> lock(m_replicationQueueMutex);
     for (Engine::Net::UserId observerId : observers) {
-
         if (observerId == excludeUserId) {
-
             continue;
-
         }
-
-        if (!SendUdpTransformTo(observerId, transform)) {
-
-            SendToClient(observerId, Engine::Net::MakeMessage(
-
-                                         Engine::Net::MessageType::TransformState,
-
-                                         transform.Serialize(),
-
-                                         m_sequence++));
-
-        }
-
+        PendingPeerTransform pending;
+        pending.transform = transform;
+        pending.sourceUserId = sourceUserId;
+        pending.observerId = observerId;
+        m_pendingPeerTransforms.push_back(std::move(pending));
     }
-
 }
 
 
@@ -653,6 +781,19 @@ void NetServer::IoLoop() {
         }
 
         didWork = didWork || PollClients() > 0;
+
+        {
+            const size_t selfFlushBudget =
+                (std::max)(size_t{128}, m_scalePolicy.maxPeerTransformsPerTick / 4);
+            didWork = FlushPendingSelfTransforms(selfFlushBudget) > 0 || didWork;
+        }
+
+        if (GetReplicationQueueDepth() > 0) {
+            const size_t ioFlushBudget =
+                (std::max)(size_t{256}, m_scalePolicy.maxPeerTransformsPerTick / 8);
+            didWork = FlushPendingPeerTransforms(ioFlushBudget) > 0 || didWork;
+        }
+
         if (!didWork) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -787,15 +928,43 @@ void NetServer::RemoveClient(Engine::Net::UserId userId) {
 
 
 
+void NetServer::SetShardConfig(const Engine::Net::ShardConfig& config) {
+    m_shardConfig = config;
+    if (config.maxPlayers > 0) {
+        m_scalePolicy.shardHardCap = config.maxPlayers;
+    }
+}
+
+void NetServer::SetScalePolicyConfig(const Engine::Net::ScalePolicyConfig& config) {
+    m_scalePolicy = config;
+    if (config.shardHardCap > 0) {
+        m_shardConfig.maxPlayers = config.shardHardCap;
+    }
+    if (config.densityCellSize > 0.0f) {
+        m_interestManager.SetCellSize(config.densityCellSize);
+    }
+    if (config.layerFarRadius > 0.0f) {
+        m_interestManager.SetDefaultInterestRadius(config.layerFarRadius);
+    }
+    m_interestManager.SetMaxObserversPerBroadcast(config.observersCapNormal);
+}
+
+void NetServer::ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config) {
+    SetShardConfig(config.shard);
+    SetScalePolicyConfig(config.scalePolicy);
+}
+
+void NetServer::ApplyLayeringState(bool layeringActive) {
+    m_layeringActive = layeringActive;
+    const size_t observerCap = layeringActive ? m_scalePolicy.observersCapCrowded
+                                             : m_scalePolicy.observersCapNormal;
+    m_interestManager.SetMaxObserversPerBroadcast(observerCap);
+}
+
 bool NetServer::IsShardAtCapacity() const {
 
-    if (m_shardConfig.maxPlayers == 0) {
-
-        return false;
-
-    }
-
-    return GetLoggedInClientCount() >= m_shardConfig.maxPlayers;
+    const uint32_t players = static_cast<uint32_t>(GetLoggedInClientCount());
+    return m_scalePolicy.ShouldRedirectLogin(players, m_observedTickP95Ms);
 
 }
 
@@ -1259,67 +1428,42 @@ bool NetServer::SendToClient(Engine::Net::UserId userId, const Engine::Net::NetP
 
 
 
+bool NetServer::SendUdpPayloadTo(Engine::Net::UserId userId,
+                                 Engine::Net::MessageType type,
+                                 const Engine::Net::NetBuffer& payload) {
+    std::string endpointKey;
+    uint64_t sessionToken = 0;
+    {
+        std::lock_guard<std::mutex> worldLock(m_worldMutex);
+        const auto endpointIt = m_userToEndpoint.find(userId);
+        if (endpointIt == m_userToEndpoint.end()) {
+            return false;
+        }
+        endpointKey = endpointIt->second;
+    }
+
+    std::string host;
+    uint16_t port = 0;
+    if (!ParseEndpointKey(endpointKey, host, port)) {
+        return false;
+    }
+
+    sessionToken = GetClientSessionToken(userId);
+    if (sessionToken == 0) {
+        return false;
+    }
+
+    return m_udpChannel.SendToEndpoint(host, port, type, payload, sessionToken);
+}
+
 bool NetServer::SendUdpTransformTo(Engine::Net::UserId userId,
 
                                    const Engine::Net::TransformStatePayload& transform) {
 
-    std::string endpointKey;
-
-    uint64_t sessionToken = 0;
-
-    {
-
-        std::lock_guard<std::mutex> worldLock(m_worldMutex);
-
-        const auto endpointIt = m_userToEndpoint.find(userId);
-
-        if (endpointIt == m_userToEndpoint.end()) {
-
-            return false;
-
-        }
-
-        endpointKey = endpointIt->second;
-
-    }
-
-
-
-    std::string host;
-
-    uint16_t port = 0;
-
-    if (!ParseEndpointKey(endpointKey, host, port)) {
-
-        return false;
-
-    }
-
-
-
-    sessionToken = GetClientSessionToken(userId);
-
-    if (sessionToken == 0) {
-
-        return false;
-
-    }
-
-
-
-    return m_udpChannel.SendToEndpoint(host,
-
-                                       port,
-
-                                       Engine::Net::MessageType::UnreliableTransform,
-
-                                       transform.Serialize(),
-
-                                       sessionToken);
-
+    return SendUdpPayloadTo(userId,
+                            Engine::Net::MessageType::UnreliableTransform,
+                            transform.Serialize());
 }
-
-
 
 void NetServer::Broadcast(const Engine::Net::NetPacket& message, Engine::Net::UserId excludeUserId) {
 

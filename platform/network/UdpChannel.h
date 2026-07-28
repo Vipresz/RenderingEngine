@@ -26,6 +26,8 @@ using UdpSessionRegisterHandler =
     std::function<void(const Engine::Net::UdpSessionRegisterPayload&, const UdpDatagramContext&)>;
 using UdpMovementCommandHandler =
     std::function<void(const Engine::Net::MovementCommand&, const UdpDatagramContext&)>;
+using UdpMovementAckHandler =
+    std::function<void(const Engine::Net::MovementAckPayload&, const UdpDatagramContext&)>;
 
 // Lightweight unreliable channel for high-frequency movement updates over UDP.
 class UdpChannel {
@@ -44,6 +46,9 @@ public:
     }
     void SetUdpMovementCommandHandler(UdpMovementCommandHandler handler) {
         m_movementHandler = std::move(handler);
+    }
+    void SetUdpMovementAckHandler(UdpMovementAckHandler handler) {
+        m_movementAckHandler = std::move(handler);
     }
 
     void SetSessionToken(uint64_t sessionToken) { m_sessionToken = sessionToken; }
@@ -88,6 +93,7 @@ private:
     UnreliableTransformHandler m_transformHandler;
     UdpSessionRegisterHandler m_registerHandler;
     UdpMovementCommandHandler m_movementHandler;
+    UdpMovementAckHandler m_movementAckHandler;
     uint64_t m_sendSequence = 1;
     uint64_t m_sessionToken = 0;
     SessionTokenResolver m_sessionTokenResolver;

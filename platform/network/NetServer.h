@@ -6,6 +6,9 @@
 #include "core/network/CredentialStore.h"
 #include "core/network/MovementCommand.h"
 #include "core/network/ShardConfig.h"
+#include "core/network/ScalePolicyConfig.h"
+#include "core/network/ReplicationTier.h"
+#include "core/network/ZoneScaleConfig.h"
 #include "network/InterestManager.h"
 #include "network/RateLimiter.h"
 #include "network/TlsSession.h"
@@ -17,6 +20,7 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -54,8 +58,14 @@ public:
     const Engine::Net::CredentialStore& GetCredentialStore() const { return m_credentialStore; }
     void SetTlsConfig(const TlsConfig& config) { m_tlsConfig = config; }
 
-    void SetShardConfig(const Engine::Net::ShardConfig& config) { m_shardConfig = config; }
+    void SetShardConfig(const Engine::Net::ShardConfig& config);
     const Engine::Net::ShardConfig& GetShardConfig() const { return m_shardConfig; }
+    void SetScalePolicyConfig(const Engine::Net::ScalePolicyConfig& config);
+    const Engine::Net::ScalePolicyConfig& GetScalePolicyConfig() const { return m_scalePolicy; }
+    void ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config);
+    void ApplyLayeringState(bool layeringActive);
+    void SetObservedTickP95Ms(float tickP95Ms) { m_observedTickP95Ms = tickP95Ms; }
+    bool IsLayeringActive() const { return m_layeringActive; }
 
     bool IsRunning() const { return m_running; }
     size_t GetClientCount() const;
@@ -81,6 +91,17 @@ public:
     void SendTransformToInterested(const Engine::Net::TransformStatePayload& transform,
                                    Engine::Net::UserId sourceUserId,
                                    Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    bool SendAuthoritativeSelfTransform(Engine::Net::UserId sourceUserId,
+                                        const Engine::Net::TransformStatePayload& transform);
+    void EnqueueSelfTransform(Engine::Net::UserId sourceUserId,
+                              const Engine::Net::TransformStatePayload& transform);
+    size_t FlushPendingSelfTransforms(size_t maxSends);
+    bool SendMovementAck(Engine::Net::UserId userId, uint64_t tick);
+    void EnqueueTransformToPeers(const Engine::Net::TransformStatePayload& transform,
+                                 Engine::Net::UserId sourceUserId,
+                                 Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    size_t FlushPendingPeerTransforms(size_t maxSends);
+    size_t GetReplicationQueueDepth() const;
     void SendInterestFilteredJoinState(Engine::Net::UserId userId, const glm::vec3& observerPosition);
     void StoreAuthoritativeTransform(Engine::Net::UserId userId,
                                      const Engine::Net::TransformStatePayload& transform);
@@ -129,6 +150,14 @@ private:
 
     bool SendToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
     bool SendUdpTransformTo(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
+    bool SendUdpPayloadTo(Engine::Net::UserId userId,
+                            Engine::Net::MessageType type,
+                            const Engine::Net::NetBuffer& payload);
+    bool DeliverTransformToObserver(Engine::Net::UserId observerId,
+                                    Engine::Net::UserId sourceUserId,
+                                    const Engine::Net::TransformStatePayload& transform,
+                                    bool layeringActive,
+                                    const Engine::Net::EffectiveLayerRadii& radii);
     void Broadcast(const Engine::Net::NetPacket& message,
                    Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
     void BroadcastToInterested(const Engine::Net::NetPacket& message,
@@ -139,6 +168,12 @@ private:
     uint64_t GetClientSessionToken(Engine::Net::UserId userId) const;
 
     static std::string MakeEndpointKey(const std::string& host, uint16_t port);
+
+    struct PendingPeerTransform {
+        Engine::Net::TransformStatePayload transform;
+        Engine::Net::UserId sourceUserId = Engine::Net::kInvalidUserId;
+        Engine::Net::UserId observerId = Engine::Net::kInvalidUserId;
+    };
 
     Socket m_listenSocket;
     UdpChannel m_udpChannel;
@@ -157,6 +192,9 @@ private:
     std::string m_requiredAuthToken;
     Engine::Net::CredentialStore m_credentialStore;
     Engine::Net::ShardConfig m_shardConfig;
+    Engine::Net::ScalePolicyConfig m_scalePolicy;
+    bool m_layeringActive = false;
+    float m_observedTickP95Ms = 0.0f;
     TlsConfig m_tlsConfig;
     ClientLoggedInCallback m_clientLoggedInCallback;
     ClientDisconnectedCallback m_clientDisconnectedCallback;
@@ -167,6 +205,10 @@ private:
     RateLimiter m_loginRateLimiter{100.0f, 200.0f};
     std::atomic<uint32_t> m_movementCommandsDropped{0};
     std::atomic<uint32_t> m_loginAttemptsDropped{0};
+
+    mutable std::mutex m_replicationQueueMutex;
+    std::deque<PendingPeerTransform> m_pendingPeerTransforms;
+    std::deque<PendingPeerTransform> m_pendingSelfTransforms;
 
     std::atomic<bool> m_running{false};
 };

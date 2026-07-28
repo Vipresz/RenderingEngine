@@ -6,8 +6,10 @@
 #include "render/components/TransformComponent.h"
 
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cmath>
+#include <vector>
 #include <glm/glm.hpp>
 
 using Engine::Platform::Render::Components::AnimationComponent;
@@ -139,9 +141,32 @@ void AuthoritativeGameSimulator::DrainQueues() {
     for (PendingLoadout& entry : loadouts) {
         ApplyLoadout(entry.userId, std::move(entry.loadout));
     }
+
+    std::vector<Engine::Net::TransformStatePayload> peerEnqueuePayloads;
+    peerEnqueuePayloads.reserve(commands.size());
+
     for (PendingCommand& entry : commands) {
+        if (!ApplyMovementSimulation(entry.userId, entry.command)) {
+            continue;
+        }
         ++m_tickMovementCommandsProcessed;
-        ApplyMovement(entry.userId, entry.command);
+
+        const auto playerIt = m_players.find(entry.userId);
+        if (playerIt == m_players.end()) {
+            continue;
+        }
+
+        Engine::Net::TransformStatePayload payload =
+            BuildTransformPayload(entry.userId, playerIt->second, entry.command.tick);
+        m_server.SendMovementAck(entry.userId, entry.command.tick);
+        m_server.StoreAuthoritativeTransform(entry.userId, payload);
+        m_server.EnqueueSelfTransform(entry.userId, payload);
+        peerEnqueuePayloads.push_back(payload);
+        EnqueueDeferredVisibilityUpdate(entry.userId);
+    }
+
+    for (const Engine::Net::TransformStatePayload& payload : peerEnqueuePayloads) {
+        m_server.EnqueueTransformToPeers(payload, payload.userId, Engine::Net::kInvalidUserId);
     }
 }
 
@@ -226,13 +251,26 @@ void AuthoritativeGameSimulator::ApplyLoadout(Engine::Net::UserId userId,
 
 void AuthoritativeGameSimulator::ApplyMovement(Engine::Net::UserId userId,
                                                Engine::Net::MovementCommand command) {
+    if (!ApplyMovementSimulation(userId, command)) {
+        return;
+    }
     auto playerIt = m_players.find(userId);
     if (playerIt == m_players.end()) {
         return;
     }
+    BroadcastAuthoritativeTransform(userId, playerIt->second, command.tick);
+    UpdatePeerVisibility(userId, playerIt->second.movement.position);
+}
+
+bool AuthoritativeGameSimulator::ApplyMovementSimulation(Engine::Net::UserId userId,
+                                                         Engine::Net::MovementCommand& command) {
+    auto playerIt = m_players.find(userId);
+    if (playerIt == m_players.end()) {
+        return false;
+    }
 
     if (command.tick <= playerIt->second.lastProcessedTick) {
-        return;
+        return false;
     }
 
     Engine::Net::SanitizeMovementCommand(command, m_movementSpeeds);
@@ -278,8 +316,7 @@ void AuthoritativeGameSimulator::ApplyMovement(Engine::Net::UserId userId,
             player.movement.airVelocityZ * player.movement.airVelocityZ);
     }
 
-    BroadcastAuthoritativeTransform(userId, player, command.tick);
-    UpdatePeerVisibility(userId, player.movement.position);
+    return true;
 }
 
 void AuthoritativeGameSimulator::Update(float deltaTime) {
@@ -287,8 +324,10 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
     m_tickMovementCommandsProcessed = 0;
     m_tickDirtySnapshotsSent = 0;
     m_tickVisibilityEvents = 0;
+    m_tickPeerTransformsSent = 0;
 
     DrainQueues();
+    ProcessDeferredVisibilityUpdates();
 
     m_snapshotAccumulator += deltaTime;
     if (m_snapshotAccumulator >= m_snapshotIntervalSeconds) {
@@ -314,35 +353,102 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
         }
     }
 
+    const size_t replicationBudget = m_server.GetScalePolicyConfig().maxPeerTransformsPerTick;
+    m_tickPeerTransformsSent =
+        static_cast<uint32_t>(m_server.FlushPendingPeerTransforms(replicationBudget));
+
     m_lastTickMetrics.tickMs =
         std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - tickStart).count();
+    m_lastTickMetrics.tickMsMax =
+        (std::max)(m_lastTickMetrics.tickMsMax, m_lastTickMetrics.tickMs);
+    m_sessionMetrics.sessionTickMsMax =
+        (std::max)(m_sessionMetrics.sessionTickMsMax, m_lastTickMetrics.tickMs);
     m_lastTickMetrics.connectedPlayers = static_cast<uint32_t>(m_players.size());
     m_lastTickMetrics.movementCommandsProcessed = m_tickMovementCommandsProcessed;
     m_lastTickMetrics.dirtySnapshotsSent = m_tickDirtySnapshotsSent;
     m_lastTickMetrics.visibilityEvents = m_tickVisibilityEvents;
     m_lastTickMetrics.movementCommandsDropped = m_server.ConsumeMovementCommandsDropped();
+    m_lastTickMetrics.peerTransformsSent = m_tickPeerTransformsSent;
+    m_lastTickMetrics.replicationQueueDepth =
+        static_cast<uint32_t>(m_server.GetReplicationQueueDepth());
+    m_lastTickMetrics.peerTransformsDeferred = m_lastTickMetrics.replicationQueueDepth;
     m_lastTickMetrics.tickNumber = m_tickNumber;
+
+    RefreshScalePolicy();
 
     m_sessionMetrics.connectedPlayers = m_lastTickMetrics.connectedPlayers;
     m_sessionMetrics.movementCommandsProcessed += m_tickMovementCommandsProcessed;
     m_sessionMetrics.dirtySnapshotsSent += m_tickDirtySnapshotsSent;
     m_sessionMetrics.visibilityEvents += m_tickVisibilityEvents;
     m_sessionMetrics.movementCommandsDropped += m_lastTickMetrics.movementCommandsDropped;
+    m_sessionMetrics.sessionPeerTransformsSent += m_tickPeerTransformsSent;
+    m_sessionMetrics.sessionPeerTransformsDeferred = m_lastTickMetrics.replicationQueueDepth;
     m_sessionMetrics.tickNumber = m_tickNumber;
 }
 
 glm::vec3 AuthoritativeGameSimulator::ComputeSpawnPosition(size_t spawnIndex) const {
-    constexpr float kSpacing = 2.5f;
-    constexpr int kGridWidth = 10;
-    const int row = static_cast<int>(spawnIndex / kGridWidth);
-    const int col = static_cast<int>(spawnIndex % kGridWidth);
+    const Engine::Net::ScalePolicyConfig& policy = m_server.GetScalePolicyConfig();
+    const float cellSize = m_server.GetInterestManager().GetCellSize();
+    const uint32_t densityTarget = std::max(policy.targetMaxCellDensity, 1u);
+    const float spacing = (std::clamp)(cellSize / std::sqrt(static_cast<float>(densityTarget)),
+                                     policy.spawnSpacingMin,
+                                     policy.spawnSpacingMax);
+
+    const size_t populationHint = (std::max)(m_players.size(), spawnIndex + 1);
+    const int gridWidth =
+        (std::max)(10, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(populationHint)))));
+
+    const int row = static_cast<int>(spawnIndex / static_cast<size_t>(gridWidth));
+    const int col = static_cast<int>(spawnIndex % static_cast<size_t>(gridWidth));
     glm::vec3 position = m_spawnPosition;
-    position.x += static_cast<float>(col) * kSpacing;
-    position.z += static_cast<float>(row) * kSpacing;
+    position.x += static_cast<float>(col) * spacing;
+    position.z += static_cast<float>(row) * spacing;
     if (m_terrainSampler) {
         position.y = m_terrainSampler(position.x, position.z);
     }
     return position;
+}
+
+float AuthoritativeGameSimulator::ComputeP95(const std::deque<float>& samples) {
+    if (samples.empty()) {
+        return 0.0f;
+    }
+    std::vector<float> sorted(samples.begin(), samples.end());
+    std::sort(sorted.begin(), sorted.end());
+    const size_t index =
+        std::min(sorted.size() - 1, static_cast<size_t>(std::ceil(sorted.size() * 0.95) - 1));
+    return sorted[index];
+}
+
+void AuthoritativeGameSimulator::RefreshScalePolicy() {
+    const Engine::Net::ScalePolicyConfig& policy = m_server.GetScalePolicyConfig();
+    const uint32_t cellDensity = m_server.GetInterestManager().GetMaxCellDensity();
+    const bool layeringActive = policy.IsLayeringActive(cellDensity);
+    m_server.ApplyLayeringState(layeringActive);
+
+    m_tickMsHistory.push_back(m_lastTickMetrics.tickMs);
+    constexpr size_t kTickHistorySize = 60;
+    while (m_tickMsHistory.size() > kTickHistorySize) {
+        m_tickMsHistory.pop_front();
+    }
+
+    const float tickP95Ms = ComputeP95(m_tickMsHistory);
+    m_server.SetObservedTickP95Ms(tickP95Ms);
+
+    float snapshotInterval = policy.snapshotIntervalNormalSeconds;
+    if (layeringActive) {
+        snapshotInterval = policy.snapshotIntervalCrowdedSeconds;
+    }
+    if (tickP95Ms >= policy.shardTickMsSoftLimit) {
+        snapshotInterval = std::max(snapshotInterval, policy.snapshotIntervalStressedSeconds);
+    }
+    m_snapshotIntervalSeconds = snapshotInterval;
+
+    const uint32_t players = static_cast<uint32_t>(m_players.size());
+    m_lastTickMetrics.tickP95Ms = tickP95Ms;
+    m_lastTickMetrics.cellDensityMax = cellDensity;
+    m_lastTickMetrics.layeringActive = layeringActive;
+    m_lastTickMetrics.shardRedirectRecommended = policy.ShouldRedirectLogin(players, tickP95Ms);
 }
 
 void AuthoritativeGameSimulator::NotifyInterestedPeersOfSpawn(
@@ -350,9 +456,10 @@ void AuthoritativeGameSimulator::NotifyInterestedPeersOfSpawn(
     const glm::vec3& spawnPosition,
     const std::string& displayName,
     const Engine::Net::TransformStatePayload& spawnTransform) {
-    const std::vector<Engine::Net::UserId> nearbyUsers =
-        m_server.GetInterestManager().QueryNearbyUsers(
-            spawnPosition, m_server.GetInterestManager().GetDefaultInterestRadius());
+    const std::vector<Engine::Net::UserId> interestedObservers =
+        m_server.GetInterestManager().GetInterestedObservers(userId, spawnPosition);
+    const size_t visibilityBudget =
+        m_server.GetScalePolicyConfig().maxVisibilityEventsPerTick;
 
     Engine::Net::PeerEventPayload joined;
     joined.userId = userId;
@@ -360,9 +467,12 @@ void AuthoritativeGameSimulator::NotifyInterestedPeersOfSpawn(
     const Engine::Net::NetPacket joinedPacket =
         Engine::Net::MakeMessage(Engine::Net::MessageType::PeerJoined, joined.Serialize(), 0);
 
-    for (Engine::Net::UserId observerId : nearbyUsers) {
+    for (Engine::Net::UserId observerId : interestedObservers) {
         if (observerId == userId) {
             continue;
+        }
+        if (m_tickVisibilityEvents >= visibilityBudget) {
+            break;
         }
 
         auto observerIt = m_players.find(observerId);
@@ -372,12 +482,6 @@ void AuthoritativeGameSimulator::NotifyInterestedPeersOfSpawn(
 
         if (observerIt->second.visiblePeers.insert(userId).second) {
             m_server.SendPacketToClient(observerId, joinedPacket);
-            if (!m_server.HasUdpEndpointFor(observerId)) {
-                m_server.SendPacketToClient(
-                    observerId,
-                    Engine::Net::MakeMessage(
-                        Engine::Net::MessageType::TransformState, spawnTransform.Serialize(), 0));
-            }
             ++m_tickVisibilityEvents;
         }
     }
@@ -416,6 +520,31 @@ void AuthoritativeGameSimulator::SendWorldSnapshotTo(Engine::Net::UserId userId,
             m_replication.BuildEntitySnapshot(entityUserId, m_registry, tick));
     }
     m_server.SendWorldSnapshotTo(userId, world);
+}
+
+void AuthoritativeGameSimulator::EnqueueDeferredVisibilityUpdate(Engine::Net::UserId observerId) {
+    if (m_deferredVisibilityPending.insert(observerId).second) {
+        m_deferredVisibilityUpdates.push_back(observerId);
+    }
+}
+
+void AuthoritativeGameSimulator::ProcessDeferredVisibilityUpdates() {
+    const size_t visibilityBudget = m_server.GetScalePolicyConfig().maxVisibilityEventsPerTick;
+    while (!m_deferredVisibilityUpdates.empty()) {
+        if (m_tickVisibilityEvents >= visibilityBudget) {
+            break;
+        }
+
+        const Engine::Net::UserId observerId = m_deferredVisibilityUpdates.front();
+        m_deferredVisibilityUpdates.pop_front();
+        m_deferredVisibilityPending.erase(observerId);
+
+        const auto playerIt = m_players.find(observerId);
+        if (playerIt == m_players.end()) {
+            continue;
+        }
+        UpdatePeerVisibility(observerId, playerIt->second.movement.position);
+    }
 }
 
 void AuthoritativeGameSimulator::UpdatePeerVisibility(Engine::Net::UserId observerId,

@@ -69,6 +69,12 @@ bool NetClient::ConnectUdp(const std::string& host, uint16_t udpPort) {
                 m_callbacks.onTransformState(transform);
             }
         });
+    m_udpChannel.SetUdpMovementAckHandler(
+        [this](const Engine::Net::MovementAckPayload& ack, const UdpDatagramContext&) {
+            if (m_callbacks.onMovementAck) {
+                m_callbacks.onMovementAck(ack);
+            }
+        });
     return true;
 }
 
@@ -279,6 +285,14 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (Engine::Net::TransformStatePayload::Deserialize(message.payload, transform) &&
                 m_callbacks.onTransformState) {
                 m_callbacks.onTransformState(transform);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::MovementAck: {
+            Engine::Net::MovementAckPayload ack;
+            if (Engine::Net::MovementAckPayload::Deserialize(message.payload, ack) &&
+                m_callbacks.onMovementAck) {
+                m_callbacks.onMovementAck(ack);
             }
             break;
         }

@@ -246,6 +246,24 @@ struct UdpSessionRegisterPayload {
     }
 };
 
+struct MovementAckPayload {
+    UserId userId = kInvalidUserId;
+    uint64_t tick = 0;
+
+    NetBuffer Serialize() const {
+        NetBuffer buffer;
+        buffer.WriteU32(userId);
+        buffer.WriteU64(tick);
+        return buffer;
+    }
+
+    static bool Deserialize(const NetBuffer& buffer, MovementAckPayload& out) {
+        NetBuffer copy = buffer;
+        copy.ResetRead();
+        return copy.ReadU32(out.userId) && copy.ReadU64(out.tick);
+    }
+};
+
 inline NetPacket MakeMessage(MessageType type, const NetBuffer& payload, uint64_t sequence = 0) {
     NetPacket message;
     message.header.type = static_cast<MessageTypeId>(type);

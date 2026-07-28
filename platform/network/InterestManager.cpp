@@ -125,6 +125,31 @@ std::vector<Engine::Net::UserId> InterestManager::GetInterestedObservers(
     return observers;
 }
 
+bool InterestManager::TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3& outPosition) const {
+    const auto it = m_positions.find(userId);
+    if (it == m_positions.end()) {
+        return false;
+    }
+    outPosition = it->second;
+    return true;
+}
+
+size_t InterestManager::CountUsersInCell(const glm::vec3& position) const {
+    const auto cellIt = m_cells.find(ToCell(position));
+    if (cellIt == m_cells.end()) {
+        return 0;
+    }
+    return cellIt->second.size();
+}
+
+uint32_t InterestManager::GetMaxCellDensity() const {
+    uint32_t maxDensity = 0;
+    for (const auto& entry : m_cells) {
+        maxDensity = std::max(maxDensity, static_cast<uint32_t>(entry.second.size()));
+    }
+    return maxDensity;
+}
+
 } // namespace Networking
 } // namespace Platform
 } // namespace Engine

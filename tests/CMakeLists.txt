@@ -31,6 +31,9 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/SecureCompare.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/UdpMessageAuth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CredentialStore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ScalePolicyConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ReplicationTier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ZoneScaleConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/InterestManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/RateLimiter.cpp
@@ -85,6 +88,9 @@ set(ENGINE_TEST_SOURCES
     core/PasswordHasherTest.cpp
     core/LoadoutReplicationTest.cpp
     core/AuthorityHardeningTest.cpp
+    core/ReplicationTierTest.cpp
+    core/ScalePolicyTest.cpp
+    core/ZoneScaleConfigTest.cpp
     terrain/HeightmapTerrainTest.cpp
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
@@ -93,11 +99,14 @@ set(ENGINE_TEST_SOURCES
 )
 
 if(BUILD_ENGINE_PLATFORM)
-    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp)
+    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp network/NetServerScalePolicyMultiUserTest.cpp)
 endif()
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})
 target_include_directories(EngineTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(EngineTests PRIVATE
+    ENGINE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config"
+)
 target_link_libraries(EngineTests PRIVATE EngineTestSupport GTest::gtest_main)
 target_compile_features(EngineTests PRIVATE cxx_std_17)
 

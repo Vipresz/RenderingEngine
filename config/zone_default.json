@@ -1,0 +1,29 @@
+{
+  "zoneId": "capital_plaza",
+  "shard": {
+    "shardId": 2,
+    "maxPlayers": 256,
+    "redirectHost": "127.0.0.1",
+    "redirectTcpPort": 17879,
+    "redirectUdpPort": 17880
+  },
+  "scalePolicy": {
+    "overflowPolicy": "LayerFirst",
+    "shardSoftCap": 180,
+    "shardHardCap": 256,
+    "shardSplitThreshold": 200,
+    "shardTickMsSoftLimit": 12.0,
+    "shardTickMsHardLimit": 16.0,
+    "cellLayerDensityThreshold": 40,
+    "densityCellSize": 32.0,
+    "layerFullRadius": 20.0,
+    "layerMidRadius": 50.0,
+    "layerFarRadius": 120.0,
+    "layerFullRadiusCrowded": 14.0,
+    "observersCapNormal": 64,
+    "observersCapCrowded": 20,
+    "snapshotIntervalNormalSeconds": 0.1,
+    "snapshotIntervalCrowdedSeconds": 0.15,
+    "snapshotIntervalStressedSeconds": 0.2
+  }
+}
