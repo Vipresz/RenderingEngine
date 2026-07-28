@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <cstddef>
 
 namespace Engine {
 namespace Platform {
