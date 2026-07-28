@@ -16,6 +16,10 @@ TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     UdpChannel server;
     UdpChannel client;
 
+    constexpr uint64_t kSessionToken = 0xCAFEBABE12345678ull;
+    client.SetSessionToken(kSessionToken);
+    server.SetSessionTokenResolver([kSessionToken](const UdpDatagramContext&) { return kSessionToken; });
+
     const uint16_t port = Engine::Tests::AllocateEphemeralTestPort(0);
     ASSERT_TRUE(server.Bind("127.0.0.1", port));
     ASSERT_TRUE(client.Connect("127.0.0.1", port));
@@ -46,6 +50,44 @@ TEST(UdpChannelTest, LoopbackUnreliableTransform) {
     EXPECT_FLOAT_EQ(receivedPayload.position.z, 3.0f);
 }
 
+TEST(UdpChannelTest, LoopbackMovementCommand) {
+    UdpChannel server;
+    UdpChannel client;
+
+    constexpr uint64_t kSessionToken = 0xFEEDBEEF12345678ull;
+    client.SetSessionToken(kSessionToken);
+    server.SetSessionTokenResolver([kSessionToken](const UdpDatagramContext&) { return kSessionToken; });
+
+    const uint16_t port = Engine::Tests::AllocateEphemeralTestPort(2);
+    ASSERT_TRUE(server.Bind("127.0.0.1", port));
+    ASSERT_TRUE(client.Connect("127.0.0.1", port));
+
+    std::atomic<bool> received{false};
+    Engine::Net::MovementCommand receivedCommand;
+
+    server.SetUdpMovementCommandHandler([&](const Engine::Net::MovementCommand& command, const UdpDatagramContext&) {
+        receivedCommand = command;
+        received = true;
+    });
+
+    Engine::Net::MovementCommand sent;
+    sent.tick = 42;
+    sent.moveX = 1.0f;
+    sent.moveZ = 0.5f;
+    ASSERT_TRUE(client.SendMovementCommand(sent));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!received && std::chrono::steady_clock::now() < deadline) {
+        server.Poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    ASSERT_TRUE(received.load());
+    EXPECT_EQ(receivedCommand.tick, 42u);
+    EXPECT_FLOAT_EQ(receivedCommand.moveX, 1.0f);
+    EXPECT_FLOAT_EQ(receivedCommand.moveZ, 0.5f);
+}
+
 TEST(UdpChannelTest, LoopbackSessionRegister) {
     UdpChannel server;
     UdpChannel client;
@@ -67,6 +109,7 @@ TEST(UdpChannelTest, LoopbackSessionRegister) {
     UdpSessionRegisterPayload sent;
     sent.userId = 3;
     sent.sessionToken = 0xABCDEF01ull;
+    client.SetSessionToken(sent.sessionToken);
     ASSERT_TRUE(client.SendUdpSessionRegister(sent));
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);

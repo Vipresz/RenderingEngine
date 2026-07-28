@@ -51,6 +51,30 @@ jobs:
         # Sequential: parallel gtest discovery + net integration tests can deadlock on Linux.
         run: ctest --test-dir build --output-on-failure -j 1 --label-exclude aggregate
 
+  test-platform-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure Platform + TLS
+        run: >
+          cmake -B build-platform
+          -DBUILD_ENGINE_EXAMPLES=OFF
+          -DBUILD_ENGINE_TESTS=ON
+          -DBUILD_ENGINE_PLATFORM=ON
+          -DENGINE_ENABLE_TLS=ON
+          -DENGINE_ENABLE_AUDIO=ON
+
+      - name: Build
+        run: cmake --build build-platform --config Release --target EngineTests --parallel
+
+      - name: Test
+        run: ctest --test-dir build-platform -C Release --output-on-failure --label-exclude aggregate
+
   coverage-windows:
     runs-on: windows-latest
     timeout-minutes: 45

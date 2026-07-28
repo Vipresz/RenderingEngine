@@ -26,6 +26,7 @@ private:
     GLuint m_shadowFbo = 0;
     GLuint m_shadowDepthTexture = 0;
     bool m_initialized = false;
+    bool m_shaderLoadFailed = false;
     static constexpr int kShadowMapSize = 2048;
     glm::vec3 m_lightDirection{0.3f, -1.0f, 0.2f};
 };

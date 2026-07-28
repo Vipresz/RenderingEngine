@@ -22,6 +22,7 @@ set(PLATFORM_SOURCES
     render/passes/ShadowRenderPass.cpp
     render/passes/OpaqueRenderPass.cpp
     render/passes/TransparentRenderPass.cpp
+    render/passes/RenderPassMeshDraw.cpp
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
     render/systems/CameraSystem.cpp
@@ -30,6 +31,7 @@ set(PLATFORM_SOURCES
     network/DatagramSocket.cpp
     network/UdpChannel.cpp
     network/InterestManager.cpp
+    network/RateLimiter.cpp
     network/ServerAuthority.cpp
     network/NetworkConnection.cpp
     network/NetClient.cpp

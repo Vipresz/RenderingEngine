@@ -2,6 +2,7 @@
 
 #include "core/network/NetPacket.h"
 #include "core/network/NetworkPayloads.h"
+#include "core/network/MovementCommand.h"
 #include "core/network/ReplicationTypes.h"
 #include "network/MessageQueue.h"
 #include "network/NetworkConnection.h"
@@ -55,6 +56,7 @@ public:
 
     bool SendTransformState(const Engine::Net::TransformStatePayload& payload);
     bool SendUnreliableTransform(const Engine::Net::TransformStatePayload& payload);
+    bool SendMovementCommand(const Engine::Net::MovementCommand& command);
     bool SendGenericData(const Engine::Net::GenericDataPayload& payload);
     bool SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
     bool SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot);

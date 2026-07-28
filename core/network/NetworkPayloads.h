@@ -52,12 +52,24 @@ struct LoginResponsePayload {
     std::string message;
     uint64_t udpSessionToken = 0;
 
+    // Shard redirect (populated when this shard is at capacity).
+    bool redirect = false;
+    uint32_t shardId = 0;
+    std::string redirectHost;
+    uint16_t redirectTcpPort = 0;
+    uint16_t redirectUdpPort = 0;
+
     NetBuffer Serialize() const {
         NetBuffer buffer;
         buffer.WriteU8(success ? 1 : 0);
         buffer.WriteU32(assignedUserId);
         buffer.WriteString(message);
         buffer.WriteU64(udpSessionToken);
+        buffer.WriteU8(redirect ? 1 : 0);
+        buffer.WriteU32(shardId);
+        buffer.WriteString(redirectHost);
+        buffer.WriteU16(redirectTcpPort);
+        buffer.WriteU16(redirectUdpPort);
         return buffer;
     }
 
@@ -71,6 +83,24 @@ struct LoginResponsePayload {
         out.success = successByte != 0;
         if (!copy.ReadU64(out.udpSessionToken)) {
             out.udpSessionToken = 0;
+        }
+        out.redirect = false;
+        out.shardId = 0;
+        out.redirectHost.clear();
+        out.redirectTcpPort = 0;
+        out.redirectUdpPort = 0;
+        uint8_t redirectByte = 0;
+        if (!copy.ReadU8(redirectByte)) {
+            return true;
+        }
+        out.redirect = redirectByte != 0;
+        if (!copy.ReadU32(out.shardId) || !copy.ReadString(out.redirectHost) ||
+            !copy.ReadU16(out.redirectTcpPort) || !copy.ReadU16(out.redirectUdpPort)) {
+            out.redirect = false;
+            out.shardId = 0;
+            out.redirectHost.clear();
+            out.redirectTcpPort = 0;
+            out.redirectUdpPort = 0;
         }
         return true;
     }

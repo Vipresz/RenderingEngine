@@ -66,8 +66,9 @@ void ShadowRenderPass::EnsureResources() {
     m_depthShader.SetWarnOnMissingUniforms(false);
     m_depthShader.CreateFromFiles("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");
     if (!m_depthShader.IsValid()) {
-        LOG_WARNING("ShadowRenderPass",
-                    "shadow_depth shader failed to load — directional shadows disabled (check shaders/shadow_depth.*)");
+        LOG_ERROR("ShadowRenderPass",
+                  "shadow_depth shader failed to load — directional shadows disabled (check shaders/shadow_depth.*)");
+        m_shaderLoadFailed = true;
         return;
     }
 

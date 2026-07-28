@@ -32,6 +32,7 @@ enum class MessageType : MessageTypeId {
 
     UnreliableTransform = 40,
     UdpSessionRegister = 41,
+    UdpMovementCommand = 42,
 
     PeerJoined = 20,
     PeerLeft = 21,
@@ -52,6 +53,7 @@ inline const char* MessageTypeName(MessageType type) {
         case MessageType::EntitySnapshot: return "EntitySnapshot";
         case MessageType::UnreliableTransform: return "UnreliableTransform";
         case MessageType::UdpSessionRegister: return "UdpSessionRegister";
+        case MessageType::UdpMovementCommand: return "UdpMovementCommand";
         case MessageType::PeerJoined: return "PeerJoined";
         case MessageType::PeerLeft: return "PeerLeft";
         case MessageType::Ping: return "Ping";

@@ -27,9 +27,13 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CharacterMovementSimulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/PasswordHasher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CryptoSha256.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/SecureCompare.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/UdpMessageAuth.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CredentialStore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/InterestManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/RateLimiter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ServerAuthority.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/DatagramSocket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/UdpChannel.cpp
@@ -37,6 +41,7 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetworkConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/TlsSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/systems/ReplicationSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/physics/SimplePhysicsWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/audio/NullAudioBackend.cpp
@@ -61,15 +66,19 @@ set(ENGINE_TEST_SOURCES
     core/ReplicationTypesTest.cpp
     core/ECSTest.cpp
     core/DeterministicMathTest.cpp
+    core/SecureCompareTest.cpp
+    core/UdpMessageAuthTest.cpp
     scene/SceneTest.cpp
     scene/SceneSerializerTest.cpp
     scene/PrefabTest.cpp
     network/InterestManagerTest.cpp
+    network/RateLimiterTest.cpp
     network/ServerAuthorityTest.cpp
     network/SocketTest.cpp
     network/UdpChannelTest.cpp
     network/ReplicationSystemTest.cpp
     network/NetServerIntegrationTest.cpp
+    network/TlsSessionTest.cpp
     network/CharacterMovementSimulatorTest.cpp
     network/ClientPredictionTest.cpp
     core/CredentialStoreTest.cpp
@@ -79,12 +88,24 @@ set(ENGINE_TEST_SOURCES
     terrain/HeightmapTerrainTest.cpp
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
+    render/RaycastTest.cpp
+    render/ShadowShaderFilesTest.cpp
 )
+
+if(BUILD_ENGINE_PLATFORM)
+    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp)
+endif()
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})
 target_include_directories(EngineTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(EngineTests PRIVATE EngineTestSupport GTest::gtest_main)
 target_compile_features(EngineTests PRIVATE cxx_std_17)
+
+if(BUILD_ENGINE_PLATFORM)
+    target_link_libraries(EngineTests PRIVATE Platform)
+    target_compile_definitions(EngineTests PRIVATE ENGINE_PLATFORM_TESTS)
+endif()
+
 set_target_properties(EngineTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )

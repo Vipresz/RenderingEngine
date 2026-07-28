@@ -3,6 +3,7 @@
 #include "network/NetClient.h"
 #include "network/NetServer.h"
 #include "network/UdpChannel.h"
+#include "core/network/MovementCommand.h"
 #include "TestPort.h"
 
 #include <atomic>
@@ -67,6 +68,10 @@ TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveUpdatesAuthority) {
     ASSERT_TRUE(client.Connect(kHost, tcpPort));
     ASSERT_TRUE(client.Login("integration_player"));
     ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
+    ASSERT_TRUE(client.RegisterUdpSession());
+    ASSERT_TRUE(WaitUntil(
+        [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
+        std::chrono::seconds(2)));
     ASSERT_TRUE(client.RegisterUdpSession());
     ASSERT_TRUE(WaitUntil(
         [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
@@ -321,4 +326,41 @@ TEST_F(NetServerAuthoritativeModeTest, DropsClientEntitySnapshotsAndTransforms) 
 
     publisher.Disconnect();
     observer.Disconnect();
+}
+
+class NetServerShardTest : public ::testing::Test {
+protected:
+    NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
+
+    void SetUp() override {
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(40);
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
+        Engine::Net::ShardConfig shard;
+        shard.maxPlayers = 1;
+        shard.shardId = 7;
+        shard.redirectHost = "127.0.0.1";
+        shard.redirectTcpPort = static_cast<uint16_t>(tcpPort + 100);
+        shard.redirectUdpPort = static_cast<uint16_t>(tcpPort + 101);
+        server.SetShardConfig(shard);
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
+    }
+
+    void TearDown() override {
+        server.Stop();
+    }
+};
+
+TEST_F(NetServerShardTest, RejectsLoginWhenShardIsFullWithRedirect) {
+    NetClient first;
+    ASSERT_TRUE(first.Connect(kHost, tcpPort));
+    ASSERT_TRUE(first.Login("first_player"));
+
+    NetClient second;
+    ASSERT_TRUE(second.Connect(kHost, tcpPort));
+    EXPECT_FALSE(second.Login("second_player"));
+
+    first.Disconnect();
+    second.Disconnect();
 }

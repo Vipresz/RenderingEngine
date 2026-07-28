@@ -2,6 +2,8 @@
 
 #if defined(ENGINE_ENABLE_TLS)
 
+#include "Logger.h"
+
 #include <cstring>
 
 #include <mbedtls/ctr_drbg.h>
@@ -158,7 +160,11 @@ bool TlsSession::InitializeServer(uintptr_t socketHandle, const TlsConfig& confi
     }
 
     if (mbedtls_x509_crt_parse_file(&m_impl->serverCert, config.certificatePath.c_str()) != 0 ||
-        mbedtls_pk_parse_keyfile(&m_impl->privateKey, config.privateKeyPath.c_str(), nullptr) != 0) {
+        mbedtls_pk_parse_keyfile(&m_impl->privateKey,
+                                 config.privateKeyPath.c_str(),
+                                 nullptr,
+                                 mbedtls_ctr_drbg_random,
+                                 &m_impl->ctrDrbg) != 0) {
         Close();
         return false;
     }

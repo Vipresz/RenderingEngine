@@ -66,6 +66,7 @@ uniform sampler2D directionalShadowMap;
 uniform OmniShadowMap omniShadowMaps[MAX_POINT_LIGHTS + MAX_SPOT_LIGHTS];
 
 uniform Material material;
+uniform float materialOpacity;
 
 uniform vec3 eyePosition;
 
@@ -247,7 +248,8 @@ void main()
 	}
 
 	vec4 lit = CalcDirectionalLight() + CalcPointLights() + CalcSpotLights();
-	colour = vec4(surfaceColor * lit.rgb, 1.0);
+	float alpha = clamp(materialOpacity, 0.0, 1.0);
+	colour = vec4(surfaceColor * lit.rgb, alpha);
 }
 
 

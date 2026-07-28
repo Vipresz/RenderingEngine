@@ -21,11 +21,15 @@ public:
 
     void SetCellSize(float cellSize);
     void SetDefaultInterestRadius(float radius);
+    float GetDefaultInterestRadius() const { return m_defaultInterestRadius; }
+
+    void SetMaxObserversPerBroadcast(size_t maxObservers);
+    size_t GetMaxObserversPerBroadcast() const { return m_maxObserversPerBroadcast; }
 
     void UpdateEntity(Engine::Net::UserId userId, const glm::vec3& position);
     void RemoveEntity(Engine::Net::UserId userId);
 
-    // Returns user IDs that should receive updates about `sourceUserId` from `observerPosition`.
+    // Returns user IDs that should receive updates about `sourceUserId` from `sourcePosition`.
     std::vector<Engine::Net::UserId> GetInterestedObservers(Engine::Net::UserId sourceUserId,
                                                             const glm::vec3& sourcePosition) const;
 
@@ -56,6 +60,7 @@ private:
     CellKey ToCell(const glm::vec3& position) const;
     float m_cellSize = 32.0f;
     float m_defaultInterestRadius = 128.0f;
+    size_t m_maxObserversPerBroadcast = 64;
     std::unordered_map<Engine::Net::UserId, glm::vec3> m_positions;
     std::unordered_map<CellKey, std::unordered_set<Engine::Net::UserId>, CellKeyHash> m_cells;
 };

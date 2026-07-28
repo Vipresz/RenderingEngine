@@ -199,14 +199,7 @@ void NetworkSystem::SendMovementCommand(const Engine::Net::MovementCommand& comm
     if (!m_client.IsLoggedIn()) {
         return;
     }
-
-    Engine::Net::GenericDataPayload payload;
-    payload.userId = m_client.GetUserId();
-    payload.tick = command.tick;
-    payload.channel = Engine::Net::kMovementCommandChannel;
-    const Engine::Net::NetBuffer buffer = Engine::Net::SerializeMovementCommand(command);
-    payload.data = buffer.Data();
-    m_client.SendGenericData(payload);
+    m_client.SendMovementCommand(command);
 }
 
 void NetworkSystem::Shutdown(ECS::Registry& registry) {

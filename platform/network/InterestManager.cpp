@@ -17,6 +17,10 @@ void InterestManager::SetDefaultInterestRadius(float radius) {
     m_defaultInterestRadius = std::max(radius, 1.0f);
 }
 
+void InterestManager::SetMaxObserversPerBroadcast(size_t maxObservers) {
+    m_maxObserversPerBroadcast = std::max(maxObservers, size_t{1});
+}
+
 InterestManager::CellKey InterestManager::ToCell(const glm::vec3& position) const {
     return CellKey{static_cast<int>(std::floor(position.x / m_cellSize)),
                    static_cast<int>(std::floor(position.y / m_cellSize)),
@@ -96,6 +100,28 @@ std::vector<Engine::Net::UserId> InterestManager::GetInterestedObservers(
     const glm::vec3& sourcePosition) const {
     std::vector<Engine::Net::UserId> observers = QueryNearbyUsers(sourcePosition, m_defaultInterestRadius);
     observers.erase(std::remove(observers.begin(), observers.end(), sourceUserId), observers.end());
+
+    if (observers.size() <= 1) {
+        return observers;
+    }
+
+    std::sort(observers.begin(), observers.end(), [&](Engine::Net::UserId lhs, Engine::Net::UserId rhs) {
+        const auto lhsIt = m_positions.find(lhs);
+        const auto rhsIt = m_positions.find(rhs);
+        if (lhsIt == m_positions.end()) {
+            return false;
+        }
+        if (rhsIt == m_positions.end()) {
+            return true;
+        }
+        const glm::vec3 lhsDelta = lhsIt->second - sourcePosition;
+        const glm::vec3 rhsDelta = rhsIt->second - sourcePosition;
+        return glm::dot(lhsDelta, lhsDelta) < glm::dot(rhsDelta, rhsDelta);
+    });
+
+    if (observers.size() > m_maxObserversPerBroadcast) {
+        observers.resize(m_maxObserversPerBroadcast);
+    }
     return observers;
 }
 

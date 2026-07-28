@@ -60,6 +60,7 @@ bool CredentialStore::RegisterUser(const std::string& username, const std::strin
     StoredCredential credential;
     credential.record = PasswordHasher::HashPassword(password);
     m_users[username] = std::move(credential);
+    m_requireCredentials = true;
     return true;
 }
 
@@ -105,7 +106,14 @@ bool CredentialStore::LoadFromFile(const std::string& path) {
         m_users[username] = std::move(credential);
     }
 
+    OnUsersLoaded();
     return !m_users.empty();
+}
+
+void CredentialStore::OnUsersLoaded() {
+    if (!m_users.empty()) {
+        m_requireCredentials = true;
+    }
 }
 
 bool CredentialStore::SaveToFile(const std::string& path) const {

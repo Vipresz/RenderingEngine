@@ -135,6 +135,7 @@ void NetClient::Disconnect() {
     m_loggedIn = false;
     m_userId = Engine::Net::kInvalidUserId;
     m_udpSessionToken = 0;
+    m_udpChannel.SetSessionToken(0);
 
     if (m_connection) {
         m_connection->Close();
@@ -171,6 +172,23 @@ bool NetClient::SendUnreliableTransform(const Engine::Net::TransformStatePayload
     Engine::Net::TransformStatePayload outgoing = payload;
     outgoing.userId = m_userId;
     return m_udpChannel.SendUnreliableTransform(outgoing);
+}
+
+bool NetClient::SendMovementCommand(const Engine::Net::MovementCommand& command) {
+    if (!m_loggedIn) {
+        return false;
+    }
+    if (m_useUdpForMovement && m_udpChannel.IsOpen()) {
+        return m_udpChannel.SendMovementCommand(command);
+    }
+
+    Engine::Net::GenericDataPayload payload;
+    payload.userId = m_userId;
+    payload.tick = command.tick;
+    payload.channel = Engine::Net::kMovementCommandChannel;
+    const Engine::Net::NetBuffer buffer = Engine::Net::SerializeMovementCommand(command);
+    payload.data = buffer.Data();
+    return SendGenericData(payload);
 }
 
 bool NetClient::SendGenericData(const Engine::Net::GenericDataPayload& payload) {
@@ -235,6 +253,7 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
                 m_loggedIn = true;
                 m_userId = response.assignedUserId;
                 m_udpSessionToken = response.udpSessionToken;
+                m_udpChannel.SetSessionToken(m_udpSessionToken);
             } else {
                 m_loginRejected = true;
                 LOG_ERROR_FMT("NetClient", "Login failed: %s", response.message.c_str());

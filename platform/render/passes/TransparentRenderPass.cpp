@@ -1,6 +1,6 @@
 #include "render/passes/TransparentRenderPass.h"
 
-#include <GL/glew.h>
+#include "render/passes/RenderPassMeshDraw.h"
 
 namespace Engine {
 namespace Platform {
@@ -8,11 +8,24 @@ namespace Render {
 namespace Passes {
 
 void TransparentRenderPass::Execute(RenderContext& context) {
-    (void)context;
-    // Reserved for alpha-blended geometry sorted back-to-front.
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_BLEND);
+    if (!context.registry || !context.shader || !context.cameraSource) {
+        return;
+    }
+
+    const glm::vec3 eyePos = context.cameraSource->GetEyePosition();
+    std::vector<TransparentDrawItem> transparentItems;
+    CollectTransparentDrawItems(*context.registry, eyePos, transparentItems);
+    if (transparentItems.empty()) {
+        return;
+    }
+
+    std::vector<EntityID> entityOrder;
+    entityOrder.reserve(transparentItems.size());
+    for (const TransparentDrawItem& item : transparentItems) {
+        entityOrder.push_back(item.entityID);
+    }
+
+    DrawMeshEntities(context, entityOrder, true);
 }
 
 } // namespace Passes

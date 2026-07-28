@@ -1311,7 +1311,10 @@ bool Model::RaycastHeightmap(const glm::vec3& localOrigin, const glm::vec3& loca
 
 bool Model::RaycastWorld(const glm::mat4& modelMatrix, const glm::vec3& origin, const glm::vec3& dir,
                          float maxDistance, float& outDistance) const {
-    if (maxDistance <= 0.0f || m_collisionTriangles.empty()) {
+    if (maxDistance <= 0.0f) {
+        return false;
+    }
+    if (!HasHeightmapTerrain() && m_collisionTriangles.empty()) {
         return false;
     }
 
