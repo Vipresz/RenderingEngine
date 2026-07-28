@@ -16,7 +16,9 @@ Shader::Shader() {
     uniformSpecularIntensity = 0;
     uniformShininess = 0;
     uniformTexture = 0;
+    uniformUseTexture = -1;
     uniformDirectionalLightTransform = 0;
+    uniformLocationsResolved = false;
 }
 
 void Shader::CreateFromString(const char* vertexCode, const char* fragmentCode) {
@@ -70,8 +72,12 @@ void Shader::CompileShader(const char* vertexCode, const char* fragmentCode) {
         return;
     }
     
-    AddShader(shaderID, vertexCode, GL_VERTEX_SHADER);
-    AddShader(shaderID, fragmentCode, GL_FRAGMENT_SHADER);
+    if (!AddShader(shaderID, vertexCode, GL_VERTEX_SHADER) ||
+        !AddShader(shaderID, fragmentCode, GL_FRAGMENT_SHADER)) {
+        glDeleteProgram(shaderID);
+        shaderID = 0;
+        return;
+    }
     
     CompileProgram();
 }
@@ -84,9 +90,13 @@ void Shader::CompileShader(const char* vertexCode, const char* geometryCode, con
         return;
     }
     
-    AddShader(shaderID, vertexCode, GL_VERTEX_SHADER);
-    AddShader(shaderID, geometryCode, GL_GEOMETRY_SHADER);
-    AddShader(shaderID, fragmentCode, GL_FRAGMENT_SHADER);
+    if (!AddShader(shaderID, vertexCode, GL_VERTEX_SHADER) ||
+        !AddShader(shaderID, geometryCode, GL_GEOMETRY_SHADER) ||
+        !AddShader(shaderID, fragmentCode, GL_FRAGMENT_SHADER)) {
+        glDeleteProgram(shaderID);
+        shaderID = 0;
+        return;
+    }
     
     CompileProgram();
 }
@@ -136,7 +146,14 @@ void Shader::CompileProgram() {
         return;
     }
     
-    // Get uniform locations (these can be -1 if uniform doesn't exist or isn't used)
+    ResolveUniformLocations();
+}
+
+void Shader::ResolveUniformLocations() {
+    if (shaderID == 0) {
+        return;
+    }
+
     uniformProjection = glGetUniformLocation(shaderID, "projection");
     uniformModel = glGetUniformLocation(shaderID, "model");
     uniformView = glGetUniformLocation(shaderID, "view");
@@ -144,15 +161,13 @@ void Shader::CompileProgram() {
     uniformSpecularIntensity = glGetUniformLocation(shaderID, "material.specularIntensity");
     uniformShininess = glGetUniformLocation(shaderID, "material.shininess");
     uniformTexture = glGetUniformLocation(shaderID, "theTexture");
+    uniformUseTexture = glGetUniformLocation(shaderID, "useTexture");
     uniformDirectionalLightTransform = glGetUniformLocation(shaderID, "directionalLightTransform");
-    {
-        const GLint uniformUseTexture = glGetUniformLocation(shaderID, "useTexture");
-        if (uniformUseTexture == -1) {
-            printf("Warning: Uniform 'useTexture' not found in shader — mesh textures may not render.\n");
-        }
+    uniformLocationsResolved = true;
+
+    if (uniformUseTexture == -1) {
+        printf("Warning: Uniform 'useTexture' not found in shader — mesh textures may not render.\n");
     }
-    
-    // Warn about missing critical uniforms (but continue - they might be optional)
     if (uniformProjection == -1) {
         printf("Warning: Uniform 'projection' not found in shader (might be unused)\n");
     }
@@ -186,6 +201,10 @@ GLint Shader::GetSpecularIntensityLocation() {
 
 GLint Shader::GetShininessLocation() {
     return uniformShininess;
+}
+
+GLint Shader::GetUseTextureLocation() {
+    return uniformUseTexture;
 }
 
 void Shader::SetTexture(GLuint textureUnit) {
@@ -222,6 +241,11 @@ void Shader::UseShader() {
     }
     
     glUseProgram(shaderID);
+
+    // Some drivers only expose active uniform locations after the program is bound once.
+    if (!uniformLocationsResolved || uniformProjection == -1 || uniformView == -1) {
+        ResolveUniformLocations();
+    }
     
     // Check for OpenGL errors after glUseProgram
     // Note: glUseProgram itself rarely generates errors if the program is valid
@@ -248,9 +272,11 @@ void Shader::ClearShader() {
     uniformModel = 0;
     uniformProjection = 0;
     uniformView = 0;
+    uniformUseTexture = -1;
+    uniformLocationsResolved = false;
 }
 
-void Shader::AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderType) {
+bool Shader::AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderType) {
     GLuint theShader = glCreateShader(shaderType);
     
     const GLchar* theCode[1];
@@ -269,10 +295,13 @@ void Shader::AddShader(GLuint theProgram, const char* shaderCode, GLenum shaderT
     if (!result) {
         glGetShaderInfoLog(theShader, sizeof(eLog), NULL, eLog);
         printf("Error compiling the %d shader: '%s'\n", shaderType, eLog);
-        return;
+        glDeleteShader(theShader);
+        return false;
     }
     
     glAttachShader(theProgram, theShader);
+    glDeleteShader(theShader);
+    return true;
 }
 
 Shader::~Shader() {

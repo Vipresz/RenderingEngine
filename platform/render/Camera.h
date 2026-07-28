@@ -4,12 +4,13 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <GLFW/glfw3.h>
+#include "render/ICameraSource.h"
 
 namespace Engine {
 namespace Platform {
 namespace Render {
 
-class Camera {
+class Camera : public ICameraSource {
 public:
     Camera();
     Camera(glm::vec3 startPosition, glm::vec3 startUp, 
@@ -17,11 +18,15 @@ public:
            GLfloat startMoveSpeed, GLfloat startTurnSpeed);
     
     void keyControl(bool* keys, GLfloat deltaTime);
+    void OnMouseMove(float deltaX, float deltaY) override;
+    glm::mat4 GetViewMatrix() const override;
+    glm::vec3 GetEyePosition() const override;
+    bool GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) const override;
+
+    // Legacy API
     void mouseControl(GLfloat xChange, GLfloat yChange);
-    
     glm::vec3 getCameraPosition();
     glm::vec3 getCameraDirection();
-    
     glm::mat4 calculateViewMatrix();
     
     ~Camera();

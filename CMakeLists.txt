@@ -1,11 +1,26 @@
+cmake_minimum_required(VERSION 3.22)
+project(RenderingEngine VERSION 0.1.0 LANGUAGES CXX)
+
+# ============================================================================
+# Build options
+# ============================================================================
+
+option(BUILD_ENGINE_EXAMPLES "Build engine example programs" ON)
+option(BUILD_ENGINE_TESTS "Build RenderingEngine unit tests" ON)
+
+# Standalone test-only builds (CI) skip Platform/OpenGL. Embedded game builds keep it.
+if(CMAKE_PROJECT_NAME STREQUAL "RenderingEngine" AND NOT BUILD_ENGINE_EXAMPLES)
+    set(_engine_platform_default OFF)
+else()
+    set(_engine_platform_default ON)
+endif()
+option(BUILD_ENGINE_PLATFORM "Build Platform library (OpenGL, rendering, etc.)" ${_engine_platform_default})
+
+# ============================================================================
 # Engine Library - Core simulation engine (ECS, timestep, jobs, etc.)
-
-# ============================================================================
-# Engine Library (Header-only INTERFACE library for now)
 # ============================================================================
 
-# Build Platform library first if it exists (needed for examples)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/CMakeLists.txt")
+if(BUILD_ENGINE_PLATFORM AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/CMakeLists.txt")
     add_subdirectory(platform)
 endif()
 
@@ -36,9 +51,6 @@ endif()
 # ============================================================================
 # Example/Simulation Executables
 # ============================================================================
-
-# Option to build examples
-option(BUILD_ENGINE_EXAMPLES "Build engine example programs" ON)
 
 if(BUILD_ENGINE_EXAMPLES)
     # Basic Example - Demonstrates rendering with grid, sphere, WASD controls, and lighting
@@ -128,6 +140,28 @@ if(BUILD_ENGINE_EXAMPLES)
     endif()
 endif()
 
+if(BUILD_ENGINE_EXAMPLES)
+    add_executable(NetworkExample
+        examples/NetworkExample.cpp
+    )
+    target_link_libraries(NetworkExample PRIVATE Engine)
+    if(TARGET Platform)
+        target_link_libraries(NetworkExample PRIVATE Platform)
+    endif()
+    set_target_properties(NetworkExample PROPERTIES
+        OUTPUT_NAME "network_example"
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+endif()
+
+# ============================================================================
+# Unit tests
+# ============================================================================
+
+if(BUILD_ENGINE_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # ============================================================================
 # Future: Add source files here when creating .cpp implementations

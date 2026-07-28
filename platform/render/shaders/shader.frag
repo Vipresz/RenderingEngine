@@ -226,25 +226,17 @@ vec4 CalcSpotLights()
 
 void main()
 {
-	// Simple default lighting - always visible
-	vec3 lightDir = normalize(vec3(0.5, 1.0, 0.3));
 	vec3 norm = Normal;
 	if (length(norm) > 0.001) {
 		norm = normalize(norm);
 	} else {
 		norm = vec3(0.0, 1.0, 0.0);
 	}
-	float diff = max(dot(norm, lightDir), 0.0);
-	float light = 0.4 + 0.6 * diff;
 
 	vec3 surfaceColor;
 	if (useTexture != 0) {
 		vec3 texColor = texture(theTexture, TexCoord).rgb;
-		// Determine accumulated vertex color (fallback when texel is black/missing).
 		vec3 vertColor = (length(vCol.rgb) > 0.01) ? vCol.rgb : vec3(0.7, 0.7, 0.7);
-		// Smoothly blend toward vertex color as texel brightness approaches zero.
-		// This ensures triangles not yet observed by any camera still show the
-		// long-term-averaged point-cloud color accumulated across the rotation.
 		float texBrightness = dot(texColor, texColor);
 		float texWeight = smoothstep(0.001, 0.025, texBrightness);
 		surfaceColor = mix(vertColor, texColor, texWeight);
@@ -254,7 +246,8 @@ void main()
 		surfaceColor = vec3(0.7, 0.7, 0.7);
 	}
 
-	colour = vec4(surfaceColor * light, 1.0);
+	vec4 lit = CalcDirectionalLight() + CalcPointLights() + CalcSpotLights();
+	colour = vec4(surfaceColor * lit.rgb, 1.0);
 }
 
 

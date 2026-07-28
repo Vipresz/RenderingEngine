@@ -1,6 +1,8 @@
 #include "render/Animation.h"
 #include "Logger.h"
+#include <assimp/config.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace Engine {
@@ -17,14 +19,19 @@ Animation::Animation()
 Animation::~Animation() {
 }
 
-bool Animation::LoadAnimation(const std::string& filePath) {
+bool Animation::LoadAnimation(const std::string& filePath,
+                              bool stripRootMotion,
+                              bool stripVerticalRootMotion) {
     m_loaded = false;
     m_channels.clear();
     m_duration = 0.0f;
     m_ticksPerSecond = 25.0f;
     
     Assimp::Importer importer;
-    
+    // Collapse FBX pivot chains so channels are named mixamorig:Bone, not
+    // mixamorig:Bone_$AssimpFbx$_Rotation (those never match skeleton bones).
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+
     // Import animation file - for animations, we only need basic processing
     // We're loading animation data, not meshes, so minimal post-processing is needed
     const aiScene* scene = importer.ReadFile(
@@ -33,11 +40,13 @@ bool Animation::LoadAnimation(const std::string& filePath) {
         aiProcess_JoinIdenticalVertices
     );
     
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+    if (!scene || !scene->mRootNode) {
         LOG_ERROR_FMT("Animation", "Failed to load animation file: %s", filePath.c_str());
         LOG_ERROR_FMT("Animation", "Assimp error: %s", importer.GetErrorString());
         return false;
     }
+
+    // Animation-only FBX exports often set AI_SCENE_FLAGS_INCOMPLETE; still usable if clips exist.
     
     if (!scene->HasAnimations()) {
         LOG_WARNING_FMT("Animation", "Animation file %s has no animations", filePath.c_str());
@@ -53,13 +62,95 @@ bool Animation::LoadAnimation(const std::string& filePath) {
         m_ticksPerSecond = 25.0f;
     }
     
+    if (scene->mNumAnimations > 1) {
+        LOG_INFO_FMT("Animation",
+                     "%s has %u animation takes; using [0] \"%s\"",
+                     filePath.c_str(),
+                     scene->mNumAnimations,
+                     animation->mName.C_Str());
+    }
+
     LoadAnimationChannels(animation);
+    if (stripRootMotion) {
+        StripLocomotionRootMotion(stripVerticalRootMotion);
+    }
     
     m_loaded = true;
     float durationSeconds = m_duration / m_ticksPerSecond;
-    LOG_INFO_FMT("Animation", "Animation loaded: %s (%.2f seconds, %zu channels)", filePath.c_str(), durationSeconds, m_channels.size());
+    const char* rootNote = "";
+    if (stripRootMotion && stripVerticalRootMotion) {
+        rootNote = ", in-place root XYZ";
+    } else if (stripRootMotion) {
+        rootNote = ", in-place root XZ";
+    }
+    LOG_INFO_FMT("Animation",
+                 "Animation loaded: %s (%.2f seconds, %zu channels, tps=%.2f%s)",
+                 filePath.c_str(),
+                 durationSeconds,
+                 m_channels.size(),
+                 m_ticksPerSecond,
+                 rootNote);
     
     return true;
+}
+
+namespace {
+
+bool IsLocomotionRootBoneName(const std::string& boneName) {
+    // Mixamo / common root-motion carriers.
+    // IMPORTANT: do not match "Hips_skin" / "*hips*" substrings — only the hips root.
+    std::string lower = boneName;
+    for (char& c : lower) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (lower == "hips" || lower == "mixamorig:hips" || lower == "mixamorig_hips") {
+        return true;
+    }
+    if (lower == "root" || lower == "mixamorig:root" || lower == "mixamorig_root") {
+        return true;
+    }
+    // Allow "Armature|Hips" style names, but reject "Hips_skin".
+    const size_t hipsPos = lower.rfind("hips");
+    if (hipsPos != std::string::npos && hipsPos + 4 == lower.size()) {
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
+void Animation::StripLocomotionRootMotion(bool stripVertical) {
+    size_t stripped = 0;
+    for (auto& pair : m_channels) {
+        // Only hips/root. Freezing every bone's translation while rotations keep
+        // playing tears the skinned mesh apart (looks like a split character).
+        if (!IsLocomotionRootBoneName(pair.first)) {
+            continue;
+        }
+
+        AnimationChannel& channel = pair.second;
+        if (channel.positions.empty()) {
+            continue;
+        }
+
+        // Lock hips to the first key. Physics owns travel; clip rotations still play.
+        const glm::vec3 lock = channel.positions.front();
+        for (glm::vec3& position : channel.positions) {
+            position.x = lock.x;
+            position.z = lock.z;
+            if (stripVertical) {
+                position.y = lock.y;
+            }
+        }
+        ++stripped;
+    }
+
+    if (stripped > 0) {
+        LOG_INFO_FMT("Animation",
+                     "Stripped %s root motion from %zu channel(s)",
+                     stripVertical ? "XYZ" : "planar",
+                     stripped);
+    }
 }
 
 void Animation::LoadAnimationChannels(const aiAnimation* animation) {
@@ -217,7 +308,10 @@ glm::vec3 AnimationChannel::InterpolateScale(float animationTime) const {
 }
 
 glm::mat4 AnimationChannel::GetTransform(float animationTime, const glm::mat4& defaultTransform) const {
-    // Clamp animation time to valid range
+    (void)defaultTransform;
+
+    // Clamp to the authored key range. Callers that want looping must wrap time themselves
+    // (AnimationSystem does). fmod here broke one-shot holds: time==maxTime became 0.
     float maxTime = 0.0f;
     if (!positionTimestamps.empty()) {
         maxTime = std::max(maxTime, positionTimestamps.back());
@@ -228,9 +322,10 @@ glm::mat4 AnimationChannel::GetTransform(float animationTime, const glm::mat4& d
     if (!scaleTimestamps.empty()) {
         maxTime = std::max(maxTime, scaleTimestamps.back());
     }
-    
     if (maxTime > 0.0f) {
-        animationTime = std::fmod(animationTime, maxTime); // Loop animation
+        animationTime = std::clamp(animationTime, 0.0f, maxTime);
+    } else {
+        animationTime = std::max(0.0f, animationTime);
     }
     
     // Get interpolated values

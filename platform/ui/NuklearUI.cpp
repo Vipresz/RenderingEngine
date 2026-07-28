@@ -1,4 +1,5 @@
 #include "NuklearUI.h"
+#include "ui/FontLibrary.h"
 #include "../Logger.h"
 #include <cstring>
 
@@ -33,13 +34,14 @@ NuklearUI::~NuklearUI() {
     Shutdown();
 }
 
-bool NuklearUI::Initialize(GLFWwindow* window) {
+bool NuklearUI::Initialize(GLFWwindow* window, FontLibrary* fontLibrary) {
     if (!window) {
         LOG_ERROR("NuklearUI", "No GLFW window context for Nuklear");
         return false;
     }
     
     m_window = window;
+    m_fontLibrary = fontLibrary;
     m_nuklear = new struct nk_glfw();
     memset(m_nuklear, 0, sizeof(struct nk_glfw));
     
@@ -66,10 +68,28 @@ bool NuklearUI::Initialize(GLFWwindow* window) {
     
     struct nk_font_atlas* atlas;
     nk_glfw3_font_stash_begin(m_nuklear, &atlas);
+#ifdef NK_INCLUDE_DEFAULT_FONT
+    struct nk_font_config playFontCfg = nk_font_config(m_fontLibrary ? m_fontLibrary->GetConfig().hudSize : 36.0f);
+    playFontCfg.range = nk_font_default_glyph_ranges();
+    playFontCfg.oversample_h = 1;
+    playFontCfg.oversample_v = 1;
+    const float playFontSize = m_fontLibrary ? m_fontLibrary->GetConfig().hudSize : 36.0f;
+    struct nk_font* defaultPlayFont = nk_font_atlas_add_default(atlas, playFontSize, &playFontCfg);
+    if (m_fontLibrary && defaultPlayFont) {
+        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::Hud, defaultPlayFont);
+        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiBold, defaultPlayFont);
+        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiRegular, defaultPlayFont);
+    }
+#endif
     nk_glfw3_font_stash_end(m_nuklear);
+    if (m_fontLibrary) {
+        m_fontLibrary->ApplyDefaultFont(m_nkContext);
+    }
     
     m_nuklearInitialized = true;
-    LOG_INFO("NuklearUI", "Nuklear initialized successfully (without keyboard callbacks)");
+    LOG_INFO("NuklearUI", m_fontLibrary && m_fontLibrary->HasAnyCustomFont()
+        ? "Nuklear initialized with custom fonts"
+        : "Nuklear initialized successfully (without keyboard callbacks)");
     return true;
 }
 
@@ -93,11 +113,15 @@ void NuklearUI::EndFrame() {
     if (m_nuklearInitialized && m_nuklear && m_window) {
         int width, height;
         glfwGetFramebufferSize(m_window, &width, &height);
-        
-        if (width <= 0 || height <= 0) return;
-        
-        // Use default rendering (uses window size for buffer allocation)
-        Render(width, height);
+
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+
+        // Nuklear buffer sizes are in bytes, NOT screen pixels.
+        constexpr int kMaxVertexBytes = 512 * 1024;
+        constexpr int kMaxElementBytes = 128 * 1024;
+        Render(kMaxVertexBytes, kMaxElementBytes);
     }
 }
 

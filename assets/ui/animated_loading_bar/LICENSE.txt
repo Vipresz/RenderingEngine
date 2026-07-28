@@ -1,0 +1,3 @@
+﻿Animated Loading Bar
+License: CC0 1.0
+Source: https://opengameart.org/content/animated-loading-bar

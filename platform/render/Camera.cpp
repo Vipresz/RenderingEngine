@@ -67,8 +67,29 @@ void Camera::mouseControl(GLfloat xChange, GLfloat yChange) {
     update();
 }
 
-glm::mat4 Camera::calculateViewMatrix() {
+void Camera::OnMouseMove(float deltaX, float deltaY) {
+    mouseControl(deltaX, deltaY);
+}
+
+glm::mat4 Camera::GetViewMatrix() const {
     return glm::lookAt(position, position + front, up);
+}
+
+glm::vec3 Camera::GetEyePosition() const {
+    return position;
+}
+
+bool Camera::GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) const {
+    outForward = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
+    if (glm::length(outForward) < 0.01f) {
+        outForward = glm::vec3(0.0f, 0.0f, -1.0f);
+    }
+    outRight = glm::normalize(glm::cross(outForward, glm::vec3(0.0f, 1.0f, 0.0f)));
+    return true;
+}
+
+glm::mat4 Camera::calculateViewMatrix() {
+    return GetViewMatrix();
 }
 
 glm::vec3 Camera::getCameraPosition() {

@@ -1,6 +1,8 @@
 #include "render/Model.h"
 #include "render/MeshAssetResolve.h"
 #include "Logger.h"
+#include "stb_image.h"
+#include <assimp/config.h>
 #include <cstdio>
 #include <algorithm>
 #include <stdexcept>
@@ -10,6 +12,7 @@
 #include <vector>
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <cmath>
 #include <cctype>
 #include <cstdlib>
 
@@ -110,42 +113,57 @@ void Model::LoadModel(const std::string& fileName) {
     }
 
     Assimp::Importer importer;
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
     const aiScene* scene = importer.ReadFile(
         pathToRead,
         aiProcess_Triangulate |
         aiProcess_FlipUVs |
         aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices
+        aiProcess_JoinIdenticalVertices |
+        aiProcess_LimitBoneWeights
     );
-    
-        if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
         std::string errorMsg = std::string("Model (") + pathToRead + ") failed to load: " + importer.GetErrorString();
         LOG_ERROR_FMT("Model", "%s", errorMsg.c_str());
         throw std::runtime_error(errorMsg);
     }
-    
+
+    if (!LoadModelFromScene(scene, pathToRead)) {
+        throw std::runtime_error("Model loaded but contains no meshes: " + pathToRead);
+    }
+}
+
+bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePath) {
+    if (!scene || !scene->mRootNode || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE)) {
+        LOG_ERROR_FMT("Model", "LoadModelFromScene failed: invalid scene (%s)", sourcePath.c_str());
+        return false;
+    }
+
     // Extract model directory for texture path resolution
-    size_t lastSlash = pathToRead.find_last_of("/\\");
+    size_t lastSlash = sourcePath.find_last_of("/\\");
     if (lastSlash != std::string::npos) {
-        m_modelDirectory = pathToRead.substr(0, lastSlash + 1);
+        m_modelDirectory = sourcePath.substr(0, lastSlash + 1);
     } else {
         m_modelDirectory = "";
     }
-    
+
     // Reset bounds before loading
     m_minX = m_minY = m_minZ = std::numeric_limits<float>::max();
     m_maxX = m_maxY = m_maxZ = std::numeric_limits<float>::lowest();
     m_boundsCalculated = false;
-    
+
     LoadNode(scene->mRootNode, scene);
     LoadMaterials(scene);
-    
+
     if (m_meshList.empty()) {
-        throw std::runtime_error("Model loaded but contains no meshes: " + pathToRead);
+        LOG_ERROR_FMT("Model", "LoadModelFromScene: no meshes in %s", sourcePath.c_str());
+        return false;
     }
-    
+
     CalculateBounds(scene);
     LOG_INFO_FMT("Model", "Model loaded: %zu meshes, height: %.2f", m_meshList.size(), GetHeight());
+    return true;
 }
 
 void Model::LoadNode(aiNode* node, const aiScene* scene) {
@@ -193,6 +211,7 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
             for (unsigned int weightIdx = 0; weightIdx < bone->mNumWeights; weightIdx++) {
                 const aiVertexWeight& weight = bone->mWeights[weightIdx];
                 unsigned int vertexID = weight.mVertexId;
+                if (vertexID >= mesh->mNumVertices) continue; // Safety: skip invalid vertex refs
                 float vertexWeight = weight.mWeight;
                 
                 for (int slot = 0; slot < 4; slot++) {
@@ -254,16 +273,18 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
     m_vertexPositions.push_back(meshPositions);
     
     // Create mesh with bone data if available
+    // numOfVertices = vertex count (vertices has 8 floats per vertex)
     Mesh* newMesh = new Mesh();
+    unsigned int vertexCount = static_cast<unsigned int>(mesh->mNumVertices);
     if (hasBones && !boneIDs.empty()) {
         newMesh->CreateMeshWithBones(&vertices[0], &indices[0],
-                                    static_cast<unsigned int>(vertices.size()),
+                                    vertexCount,
                                     static_cast<unsigned int>(indices.size()),
                                     &boneIDs[0], &boneWeights[0],
-                                    static_cast<unsigned int>(mesh->mNumVertices));
+                                    vertexCount);
     } else {
         newMesh->CreateMesh(&vertices[0], &indices[0], 
-                           static_cast<unsigned int>(vertices.size()), 
+                           vertexCount, 
                            static_cast<unsigned int>(indices.size()));
     }
     m_meshList.push_back(newMesh);
@@ -446,6 +467,25 @@ void Model::LoadMaterials(const aiScene* scene) {
                     LOG_INFO_FMT("Model", "Material %zu: diffuse from filesystem fallback '%s'", i,
                                  cand.string().c_str());
                     break;
+                }
+            }
+        }
+
+        if (!m_textureList[i]) {
+            aiColor4D diffuse(0.75f, 0.75f, 0.75f, 1.0f);
+            if (material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse) == AI_SUCCESS) {
+                auto* solid = new Texture();
+                const unsigned char r = static_cast<unsigned char>(std::clamp(diffuse.r, 0.0f, 1.0f) * 255.0f);
+                const unsigned char g = static_cast<unsigned char>(std::clamp(diffuse.g, 0.0f, 1.0f) * 255.0f);
+                const unsigned char b = static_cast<unsigned char>(std::clamp(diffuse.b, 0.0f, 1.0f) * 255.0f);
+                const unsigned char a = static_cast<unsigned char>(std::clamp(diffuse.a, 0.0f, 1.0f) * 255.0f);
+                if (solid->LoadSolidColor(r, g, b, a)) {
+                    m_textureList[i] = solid;
+                    LOG_INFO_FMT("Model",
+                                 "Material %zu: using solid diffuse fallback (%.2f, %.2f, %.2f)",
+                                 i, diffuse.r, diffuse.g, diffuse.b);
+                } else {
+                    delete solid;
                 }
             }
         }
@@ -634,6 +674,11 @@ void Model::ClearModel() {
     
     // Clear vertex positions
     m_vertexPositions.clear();
+    
+    // Clear heightmap data
+    m_heightGrid.clear();
+    m_heightGridW = m_heightGridH = 0;
+    m_terrainSizeX = m_terrainSizeZ = m_terrainHeightScale = 0.0f;
 }
 
 void Model::CreatePlane(float sizeX, float sizeZ) {
@@ -661,9 +706,9 @@ void Model::CreatePlane(float sizeX, float sizeZ) {
         0, 2, 3   // Second triangle
     };
     
-    // Create the mesh
+    // Create the mesh (4 vertices, 6 indices)
     Mesh* planeMesh = new Mesh();
-    planeMesh->CreateMesh(vertices, indices, 32, 6); // 32 floats (4 vertices * 8), 6 indices
+    planeMesh->CreateMesh(vertices, indices, 4, 6);
     
     m_meshList.push_back(planeMesh);
     m_meshToTex.push_back(0); // Use texture index 0
@@ -680,6 +725,209 @@ void Model::CreatePlane(float sizeX, float sizeZ) {
     m_minZ = -halfZ;
     m_maxZ = halfZ;
     m_boundsCalculated = true;
+}
+
+bool Model::CreateFromHeightmap(const std::string& imagePath, float sizeX, float sizeZ, float heightScale) {
+    ClearModel();
+    
+    // Load with RGB (3 channels) for height + color; force 3 for consistent layout
+    int width = 0, height = 0, channels = 0;
+    unsigned char* data = stbi_load(imagePath.c_str(), &width, &height, &channels, 3);
+    if (!data) {
+        LOG_ERROR_FMT("Model", "Failed to load heightmap: %s", imagePath.c_str());
+        return false;
+    }
+    
+    const int bytesPerPixel = 3; // R, G, B
+    const int gridW = width;
+    const int gridH = height;
+    const int numVertices = gridW * gridH;
+    const int numIndices = (gridW - 1) * (gridH - 1) * 6;
+    
+    std::vector<GLfloat> vertices;
+    std::vector<unsigned int> indices;
+    std::vector<GLfloat> vertexColors;
+    vertices.reserve(numVertices * 8);
+    indices.reserve(numIndices);
+    vertexColors.reserve(numVertices * 3);
+    
+    // Build height grid from luminance, extract vertex colors from RGB
+    m_heightGrid.resize(gridW * gridH, 0.0f);
+    float lumMin = 1.0f, lumMax = 0.0f;
+    for (int row = 0; row < gridH; ++row) {
+        for (int col = 0; col < gridW; ++col) {
+            int idx = (row * gridW + col) * bytesPerPixel;
+            float r = static_cast<float>(data[idx + 0]) / 255.0f;
+            float g = static_cast<float>(data[idx + 1]) / 255.0f;
+            float b = static_cast<float>(data[idx + 2]) / 255.0f;
+            float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+            lumMin = std::min(lumMin, lum);
+            lumMax = std::max(lumMax, lum);
+            m_heightGrid[row * gridW + col] = lum;
+            vertexColors.push_back(r);
+            vertexColors.push_back(g);
+            vertexColors.push_back(b);
+        }
+    }
+    stbi_image_free(data);
+    
+    // Normalize height range: map [lumMin,lumMax] -> [0,1]
+    float lumRange = lumMax - lumMin;
+    if (lumRange > 0.0001f) {
+        for (float& h : m_heightGrid) {
+            h = (h - lumMin) / lumRange;
+        }
+    }
+    
+    LOG_INFO_FMT("Model", "Heightmap %dx%d: luminance %.3f-%.3f, %d vertices (1:1 pixel, RGB colors)",
+        gridW, gridH, lumMin, lumMax, numVertices);
+    
+    m_heightGridW = gridW;
+    m_heightGridH = gridH;
+    m_terrainSizeX = sizeX;
+    m_terrainSizeZ = sizeZ;
+    m_terrainHeightScale = heightScale;
+    
+    // World position: pixel (row,col) -> world (row*sizeX/(H-1), height, col*sizeZ/(W-1))
+    // Span 0 to sizeX, 0 to sizeZ
+    float stepX = (gridH > 1) ? sizeX / static_cast<float>(gridH - 1) : 0.0f;
+    float stepZ = (gridW > 1) ? sizeZ / static_cast<float>(gridW - 1) : 0.0f;
+    
+    for (int row = 0; row < gridH; ++row) {
+        for (int col = 0; col < gridW; ++col) {
+            float worldX = static_cast<float>(row) * stepX;
+            float worldZ = static_cast<float>(col) * stepZ;
+            float worldY = m_heightGrid[row * gridW + col] * heightScale;
+            float u = (gridW > 1) ? static_cast<float>(col) / static_cast<float>(gridW - 1) : 0.0f;
+            float v = (gridH > 1) ? static_cast<float>(row) / static_cast<float>(gridH - 1) : 0.0f;
+            
+            vertices.push_back(worldX);
+            vertices.push_back(worldY);
+            vertices.push_back(worldZ);
+            vertices.push_back(u);
+            vertices.push_back(v);
+            vertices.push_back(0.0f);
+            vertices.push_back(1.0f);
+            vertices.push_back(0.0f);
+        }
+    }
+    
+    // Compute normals from height differences
+    auto getHeight = [&](int r, int c) -> float {
+        if (r < 0 || r >= gridH || c < 0 || c >= gridW) return 0.0f;
+        return m_heightGrid[r * gridW + c] * heightScale;
+    };
+    
+    for (int row = 0; row < gridH; ++row) {
+        for (int col = 0; col < gridW; ++col) {
+            float left = getHeight(row, col - 1);
+            float right = getHeight(row, col + 1);
+            float down = getHeight(row - 1, col);
+            float up = getHeight(row + 1, col);
+            
+            glm::vec3 normal(
+                (down - up) / (2.0f * (stepX > 0.0f ? stepX : 1.0f)),
+                2.0f,
+                (left - right) / (2.0f * (stepZ > 0.0f ? stepZ : 1.0f))
+            );
+            normal = glm::normalize(normal);
+            
+            int idx = (row * gridW + col) * 8;
+            vertices[idx + 5] = normal.x;
+            vertices[idx + 6] = normal.y;
+            vertices[idx + 7] = normal.z;
+        }
+    }
+    
+    // Quads: each quad (row,col) connects pixels (row,col), (row,col+1), (row+1,col+1), (row+1,col)
+    for (int row = 0; row < gridH - 1; ++row) {
+        for (int col = 0; col < gridW - 1; ++col) {
+            unsigned int tl = row * gridW + col;
+            unsigned int tr = tl + 1;
+            unsigned int bl = (row + 1) * gridW + col;
+            unsigned int br = bl + 1;
+            
+            indices.push_back(tl);
+            indices.push_back(tr);
+            indices.push_back(bl);
+            
+            indices.push_back(tr);
+            indices.push_back(br);
+            indices.push_back(bl);
+        }
+    }
+    
+    Mesh* terrainMesh = new Mesh();
+    terrainMesh->CreateMesh(vertices.data(), indices.data(),
+        static_cast<unsigned int>(vertices.size() / 8),
+        static_cast<unsigned int>(indices.size()));
+    terrainMesh->SetVertexColors(vertexColors.data(), static_cast<unsigned int>(vertexColors.size() / 3));
+    
+    m_meshList.push_back(terrainMesh);
+    m_meshToTex.push_back(0);
+    m_textureList.resize(1);
+    m_textureList[0] = nullptr;
+    
+    // Bounds (terrain spans 0 to sizeX, 0 to sizeZ)
+    m_minX = 0.0f;
+    m_maxX = sizeX;
+    m_minZ = 0.0f;
+    m_maxZ = sizeZ;
+    m_minY = 0.0f;
+    m_maxY = heightScale;
+    for (float h : m_heightGrid) {
+        float y = h * heightScale;
+        m_minY = std::min(m_minY, y);
+        m_maxY = std::max(m_maxY, y);
+    }
+    m_boundsCalculated = true;
+    
+    LOG_INFO_FMT("Model", "Heightmap terrain loaded: %s (%dx%d), %.1fx%.1f units, origin at (0,0)",
+        imagePath.c_str(), gridW, gridH, sizeX, sizeZ);
+    return true;
+}
+
+bool Model::HasHeightmapTerrain() const {
+    return !m_heightGrid.empty() && m_heightGridW > 0 && m_heightGridH > 0 &&
+           m_terrainSizeX > 0.0f && m_terrainSizeZ > 0.0f;
+}
+
+float Model::GetHeightAt(float worldX, float worldZ) const {
+    if (m_heightGrid.empty() || m_heightGridW <= 0 || m_heightGridH <= 0) {
+        return 0.0f;
+    }
+    
+    // Map world to pixel grid (1:1 mapping)
+    float stepX = (m_heightGridH > 1) ? m_terrainSizeX / static_cast<float>(m_heightGridH - 1) : 0.0f;
+    float stepZ = (m_heightGridW > 1) ? m_terrainSizeZ / static_cast<float>(m_heightGridW - 1) : 0.0f;
+    if (stepX <= 0.0f || stepZ <= 0.0f) return m_heightGrid[0] * m_terrainHeightScale;
+    
+    float fx = worldX / stepX;
+    float fz = worldZ / stepZ;
+    
+    if (fx < 0.0f || fx > static_cast<float>(m_heightGridH - 1) ||
+        fz < 0.0f || fz > static_cast<float>(m_heightGridW - 1)) {
+        return 0.0f;
+    }
+    
+    int row0 = static_cast<int>(std::floor(fx));
+    int col0 = static_cast<int>(std::floor(fz));
+    row0 = std::max(0, std::min(row0, m_heightGridH - 1));
+    col0 = std::max(0, std::min(col0, m_heightGridW - 1));
+    int row1 = std::min(row0 + 1, m_heightGridH - 1);
+    int col1 = std::min(col0 + 1, m_heightGridW - 1);
+    
+    float tx = fx - static_cast<float>(row0);
+    float tz = fz - static_cast<float>(col0);
+    
+    float h00 = m_heightGrid[row0 * m_heightGridW + col0] * m_terrainHeightScale;
+    float h01 = m_heightGrid[row0 * m_heightGridW + col1] * m_terrainHeightScale;
+    float h10 = m_heightGrid[row1 * m_heightGridW + col0] * m_terrainHeightScale;
+    float h11 = m_heightGrid[row1 * m_heightGridW + col1] * m_terrainHeightScale;
+    
+    float h0 = h00 * (1.0f - tz) + h01 * tz;
+    float h1 = h10 * (1.0f - tz) + h11 * tz;
+    return h0 * (1.0f - tx) + h1 * tx;
 }
 
 void Model::CreateSphere(float radius, unsigned int segments) {
@@ -747,10 +995,10 @@ void Model::CreateSphere(float radius, unsigned int segments) {
         }
     }
     
-    // Create the mesh
+    // Create the mesh (vertices.size() = 8 floats per vertex)
     Mesh* sphereMesh = new Mesh();
     sphereMesh->CreateMesh(vertices.data(), indices.data(), 
-                          static_cast<unsigned int>(vertices.size()), 
+                          static_cast<unsigned int>(vertices.size() / 8), 
                           static_cast<unsigned int>(indices.size()));
     
     m_meshList.push_back(sphereMesh);

@@ -4,7 +4,7 @@
 # Platform/Render Library
 # ============================================================================
 
-# Platform source files
+# Platform source files (core - always needed for game)
 set(PLATFORM_SOURCES
     render/Window.cpp
     render/Mesh.cpp
@@ -15,15 +15,61 @@ set(PLATFORM_SOURCES
     render/FollowCamera.cpp
     render/Model.cpp
     render/MeshAssetResolve.cpp
+    render/AssetManager.cpp
     render/Animation.cpp
     render/Skeleton.cpp
+    render/RenderPipeline.cpp
+    render/passes/ShadowRenderPass.cpp
+    render/passes/OpaqueRenderPass.cpp
+    render/passes/TransparentRenderPass.cpp
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
+    render/systems/CameraSystem.cpp
     input/InputSystem.cpp
-    utils/ConsoleRedirect.cpp
-    ui/NuklearUI.cpp
-    ui/NuklearImpl.cpp
+    network/Socket.cpp
+    network/DatagramSocket.cpp
+    network/UdpChannel.cpp
+    network/InterestManager.cpp
+    network/ServerAuthority.cpp
+    network/NetworkConnection.cpp
+    network/NetClient.cpp
+    network/NetServer.cpp
+    network/TlsSession.cpp
+    network/AuthoritativeGameSimulator.cpp
+    network/systems/NetworkSystem.cpp
+    network/systems/ReplicationSystem.cpp
+    ../core/network/CharacterMovementSimulator.cpp
+    ../core/network/PasswordHasher.cpp
+    ../core/network/CredentialStore.cpp
+    ../core/terrain/HeightmapTerrain.cpp
+    ../core/terrain/HeightmapTerrainImage.cpp
+    physics/SimplePhysicsWorld.cpp
+    physics/systems/PhysicsSystem.cpp
+    audio/NullAudioBackend.cpp
+    audio/AudioSystem.cpp
+    ../core/scene/Scene.cpp
+    ../core/scene/Prefab.cpp
+    ../core/scene/SceneSerializer.cpp
 )
+
+option(ENGINE_ENABLE_AUDIO "Enable miniaudio audio backend" ON)
+if(ENGINE_ENABLE_AUDIO)
+    list(APPEND PLATFORM_SOURCES audio/MiniaudioBackend.cpp)
+endif()
+
+# Optional: Nuklear UI (only when NUKLEAR_DIR is set)
+if(DEFINED NUKLEAR_DIR)
+    list(APPEND PLATFORM_SOURCES
+        utils/ConsoleRedirect.cpp
+        ui/NuklearUI.cpp
+        ui/NuklearImpl.cpp
+        ui/OverlayWindow.cpp
+        ui/Minimap.cpp
+        ui/MenuStyle.cpp
+        ui/FontLibrary.cpp
+        ui/UISystem.cpp
+    )
+endif()
 
 # Create STATIC library for platform layer (since we have .cpp files)
 add_library(Platform STATIC ${PLATFORM_SOURCES})
@@ -32,14 +78,38 @@ target_include_directories(Platform PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>  # For engine headers
 )
+if(ENGINE_ENABLE_AUDIO)
+    target_include_directories(Platform PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../third_party/miniaudio>)
+    target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_AUDIO)
+    message(STATUS "Audio enabled via miniaudio")
+endif()
 if(DEFINED NUKLEAR_DIR)
     target_include_directories(Platform PRIVATE ${NUKLEAR_DIR} ${NUKLEAR_DIR}/demo/glfw_opengl3)
+    target_compile_definitions(Platform PUBLIC PLATFORM_HAS_NUKLEAR)
 endif()
 
 target_compile_features(Platform PUBLIC cxx_std_17)
 
 # Link to engine (platform layer uses engine)
 target_link_libraries(Platform PUBLIC Engine)
+
+option(ENGINE_ENABLE_TLS "Enable mbedTLS for encrypted TCP connections" OFF)
+if(ENGINE_ENABLE_TLS)
+    include(FetchContent)
+    FetchContent_Declare(
+        mbedtls
+        GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
+        GIT_TAG v3.6.0
+        GIT_SHALLOW TRUE
+    )
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(mbedtls)
+    target_link_libraries(Platform PRIVATE mbedtls)
+    target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_TLS)
+    message(STATUS "TLS enabled via mbedTLS")
+endif()
 
 # ============================================================================
 # Rendering Dependencies
@@ -66,13 +136,25 @@ get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE
 if(NOT EXISTS "${PROJECT_ROOT}/CMakeLists.txt")
     get_filename_component(PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 endif()
+
+# Deps resolution (first match wins):
+# 1) Parent DEPS_BASE (e.g. camera_system2/libs)
+# 2) RenderingEngine/libs (git submodules: glm, glfw, glew, assimp)
+# 3) Sibling ../game_libs (legacy local layout)
+get_filename_component(ENGINE_LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libs" ABSOLUTE)
 if(DEFINED DEPS_BASE)
     set(GAME_LIBS_DIR "${DEPS_BASE}")
     message(STATUS "Using dependencies directory (from parent): ${GAME_LIBS_DIR}")
+elseif(EXISTS "${ENGINE_LIBS_DIR}/glm-1.0.2/glm/glm.hpp")
+    set(GAME_LIBS_DIR "${ENGINE_LIBS_DIR}")
+    message(STATUS "Using RenderingEngine/libs: ${GAME_LIBS_DIR}")
 else()
     get_filename_component(GAMES_DIR "${PROJECT_ROOT}/.." ABSOLUTE)
     set(GAME_LIBS_DIR "${GAMES_DIR}/game_libs")
     message(STATUS "Using game_libs directory: ${GAME_LIBS_DIR}")
+    if(NOT EXISTS "${GAME_LIBS_DIR}/glm-1.0.2/glm/glm.hpp")
+        message(STATUS "  Tip: init engine deps with: git -C RenderingEngine submodule update --init --recursive")
+    endif()
 endif()
 
 # ============================================================================
@@ -115,31 +197,66 @@ if(USE_HOMEBREW)
             set(GLEW_FOUND_LOCAL TRUE)
         endif()
     endif()
-else()
-    # Windows: game_libs path, or parent may set GLEW_ROOT (e.g. camera_system after GLEW zip bootstrap)
+elseif(WIN32)
+    # Windows: parent may set GLEW_ROOT; otherwise use GAME_LIBS_DIR.
+    # The glew git submodule is source-only (no include/lib) — fetch the official win32 zip into the build tree.
     if(NOT GLEW_ROOT)
         set(GLEW_ROOT "${GAME_LIBS_DIR}/glew-2.1.0")
     endif()
-set(GLEW_INCLUDE_DIR "${GLEW_ROOT}/include")
-set(GLEW_LIB_DIR "${GLEW_ROOT}/lib/Release/x64")
-set(GLEW_DLL_DIR "${GLEW_ROOT}/bin/Release/x64")
+    set(_glew_marker "${GLEW_ROOT}/include/GL/glew.h")
+    set(_glew_win_lib "${GLEW_ROOT}/lib/Release/x64/glew32.lib")
+    if(NOT EXISTS "${_glew_marker}" OR NOT EXISTS "${_glew_win_lib}")
+        set(_glew_xdir "${CMAKE_BINARY_DIR}/glew-2.1.0-win32-extract")
+        if(EXISTS "${_glew_xdir}/glew-2.1.0/include/GL/glew.h" AND EXISTS "${_glew_xdir}/glew-2.1.0/lib/Release/x64/glew32.lib")
+            set(GLEW_ROOT "${_glew_xdir}/glew-2.1.0")
+            message(STATUS "Using GLEW win32 release (build cache): ${GLEW_ROOT}")
+        else()
+            set(_glew_zip "${CMAKE_BINARY_DIR}/glew-2.1.0-win32.zip")
+            set(_glew_url "https://github.com/nigels-com/glew/releases/download/glew-2.1.0/glew-2.1.0-win32.zip")
+            if(NOT EXISTS "${_glew_zip}")
+                message(STATUS "Downloading GLEW 2.1.0 Windows release (headers + libs)...")
+                file(DOWNLOAD "${_glew_url}" "${_glew_zip}" TLS_VERIFY ON STATUS _glew_dlst)
+                list(GET _glew_dlst 0 _glew_dlcode)
+                if(NOT _glew_dlcode EQUAL 0)
+                    list(GET _glew_dlst 1 _glew_dlmsg)
+                    message(FATAL_ERROR "GLEW download failed (${_glew_dlmsg}). Get ${_glew_url} manually.")
+                endif()
+            endif()
+            file(REMOVE_RECURSE "${_glew_xdir}")
+            file(MAKE_DIRECTORY "${_glew_xdir}")
+            file(ARCHIVE_EXTRACT INPUT "${_glew_zip}" DESTINATION "${_glew_xdir}")
+            if(EXISTS "${_glew_xdir}/glew-2.1.0/include/GL/glew.h")
+                set(GLEW_ROOT "${_glew_xdir}/glew-2.1.0")
+            else()
+                message(FATAL_ERROR "GLEW zip layout not recognized under ${_glew_xdir}")
+            endif()
+            message(STATUS "Using GLEW win32 release: ${GLEW_ROOT}")
+        endif()
+    endif()
+    set(GLEW_INCLUDE_DIR "${GLEW_ROOT}/include")
+    set(GLEW_LIB_DIR "${GLEW_ROOT}/lib/Release/x64")
+    set(GLEW_DLL_DIR "${GLEW_ROOT}/bin/Release/x64")
 
-if(EXISTS "${GLEW_INCLUDE_DIR}/GL/glew.h" AND EXISTS "${GLEW_LIB_DIR}/glew32.lib")
-    target_include_directories(Platform PUBLIC ${GLEW_INCLUDE_DIR})
-    target_link_libraries(Platform PUBLIC "${GLEW_LIB_DIR}/glew32.lib")
-    message(STATUS "Found GLEW: ${GLEW_ROOT}")
+    if(EXISTS "${GLEW_INCLUDE_DIR}/GL/glew.h" AND EXISTS "${GLEW_LIB_DIR}/glew32.lib")
+        target_include_directories(Platform PUBLIC ${GLEW_INCLUDE_DIR})
+        target_link_libraries(Platform PUBLIC "${GLEW_LIB_DIR}/glew32.lib")
+        message(STATUS "Found GLEW: ${GLEW_ROOT}")
         set(GLEW_FOUND_LOCAL TRUE)
-    
-    # Copy DLL to output directory
-    if(EXISTS "${GLEW_DLL_DIR}/glew32.dll")
-        add_custom_command(TARGET Platform POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${GLEW_DLL_DIR}/glew32.dll"
-            "$<TARGET_FILE_DIR:Platform>"
-            COMMENT "Copying GLEW DLL to output directory"
-        )
+
+        if(EXISTS "${GLEW_DLL_DIR}/glew32.dll")
+            add_custom_command(TARGET Platform POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${GLEW_DLL_DIR}/glew32.dll"
+                "$<TARGET_FILE_DIR:Platform>"
+                COMMENT "Copying GLEW DLL to output directory"
+            )
+        endif()
     endif()
-    endif()
+elseif(UNIX)
+    find_package(GLEW REQUIRED)
+    target_link_libraries(Platform PUBLIC GLEW::GLEW)
+    message(STATUS "Found GLEW (system)")
+    set(GLEW_FOUND_LOCAL TRUE)
 endif()
 
 if(NOT GLEW_FOUND_LOCAL)
@@ -163,7 +280,7 @@ if(USE_HOMEBREW)
             set(GLFW_FOUND_LOCAL TRUE)
         endif()
     endif()
-else()
+elseif(WIN32)
     # Windows: Build from source (parent may set GLFW_ROOT, e.g. camera_system2/libs/glfw-3.4)
     if(NOT GLFW_ROOT)
         set(GLFW_ROOT "${GAME_LIBS_DIR}/glfw-3.4")
@@ -186,6 +303,11 @@ if(EXISTS "${GLFW_INCLUDE_DIR}/GLFW/glfw3.h")
     message(STATUS "  If you previously forced STATIC and copied vcpkg glfw3.dll, delete ${CMAKE_BINARY_DIR}/glfw and reconfigure.")
         set(GLFW_FOUND_LOCAL TRUE)
     endif()
+elseif(UNIX)
+    find_package(glfw3 REQUIRED)
+    target_link_libraries(Platform PUBLIC glfw)
+    message(STATUS "Found GLFW (system)")
+    set(GLFW_FOUND_LOCAL TRUE)
 endif()
 
 if(NOT GLFW_FOUND_LOCAL)
@@ -204,20 +326,51 @@ if(USE_HOMEBREW)
         message(STATUS "Found GLM (Homebrew): ${GLM_INCLUDE_DIR}")
         set(GLM_FOUND_LOCAL TRUE)
     endif()
-else()
-    # Windows: Use game_libs directory
-set(GLM_ROOT "${GAME_LIBS_DIR}/glm-1.0.2")
-set(GLM_INCLUDE_DIR "${GLM_ROOT}")
-
-if(EXISTS "${GLM_INCLUDE_DIR}/glm/glm.hpp")
-    target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
-    message(STATUS "Found GLM: ${GLM_ROOT}")
+elseif(WIN32)
+    # Windows: game_libs (prefer glm-1.0.2 layout; also accept flat glm/)
+    set(_GLM_CANDIDATES
+        "${GAME_LIBS_DIR}/glm-1.0.2"
+        "${GAME_LIBS_DIR}/glm"
+    )
+    foreach(_glm_root IN LISTS _GLM_CANDIDATES)
+        if(EXISTS "${_glm_root}/glm/glm.hpp")
+            set(GLM_ROOT "${_glm_root}")
+            set(GLM_INCLUDE_DIR "${_glm_root}")
+            target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
+            message(STATUS "Found GLM: ${GLM_ROOT}")
+            set(GLM_FOUND_LOCAL TRUE)
+            break()
+        elseif(EXISTS "${_glm_root}/glm.hpp")
+            # Headers live directly under glm/ — include parent so #include <glm/glm.hpp> works
+            get_filename_component(GLM_INCLUDE_DIR "${_glm_root}" DIRECTORY)
+            set(GLM_ROOT "${_glm_root}")
+            target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
+            message(STATUS "Found GLM (flat): ${GLM_ROOT}")
+            set(GLM_FOUND_LOCAL TRUE)
+            break()
+        endif()
+    endforeach()
+elseif(UNIX)
+    find_package(glm CONFIG QUIET)
+    if(glm_FOUND)
+        target_link_libraries(Platform PUBLIC glm::glm)
+        message(STATUS "Found GLM (system package)")
+    else()
+        find_path(GLM_INCLUDE_DIR glm/glm.hpp)
+        if(GLM_INCLUDE_DIR)
+            target_include_directories(Platform PUBLIC ${GLM_INCLUDE_DIR})
+            message(STATUS "Found GLM headers: ${GLM_INCLUDE_DIR}")
+        endif()
+    endif()
+    if(glm_FOUND OR GLM_INCLUDE_DIR)
         set(GLM_FOUND_LOCAL TRUE)
     endif()
 endif()
 
 if(NOT GLM_FOUND_LOCAL)
-    message(WARNING "GLM not found")
+    message(FATAL_ERROR
+        "GLM not found (expected ${GAME_LIBS_DIR}/glm-1.0.2/glm/glm.hpp).\n"
+        "Init RenderingEngine libs submodules: git -C RenderingEngine submodule update --init --recursive")
 endif()
 
 # Assimp for model loading
@@ -237,7 +390,7 @@ if(USE_HOMEBREW)
             set(ASSIMP_FOUND_LOCAL TRUE)
         endif()
     endif()
-else()
+elseif(WIN32)
     # Windows: Try new 6.0.2 location first
 set(ASSIMP_NEW_ROOT "${GAME_LIBS_DIR}/assimp-6.0.2")
 set(ASSIMP_OLD_ROOT "${GAME_LIBS_DIR}/assimp")
@@ -314,6 +467,23 @@ else()
             endif()
         endif()
     endif()
+elseif(UNIX)
+    find_package(assimp CONFIG QUIET)
+    if(assimp_FOUND)
+        target_link_libraries(Platform PUBLIC assimp::assimp)
+        message(STATUS "Found Assimp (system package)")
+        set(ASSIMP_FOUND_LOCAL TRUE)
+    else()
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(ASSIMP_PC IMPORTED_TARGET assimp)
+            if(ASSIMP_PC_FOUND)
+                target_link_libraries(Platform PUBLIC PkgConfig::ASSIMP_PC)
+                message(STATUS "Found Assimp (pkg-config)")
+                set(ASSIMP_FOUND_LOCAL TRUE)
+            endif()
+        endif()
+    endif()
 endif()
 
 if(NOT ASSIMP_FOUND_LOCAL)
@@ -322,7 +492,12 @@ endif()
 
 # Platform-specific libraries
 if(WIN32)
-    target_link_libraries(Platform PUBLIC winmm)
+    target_link_libraries(Platform PUBLIC winmm ws2_32)
+    if(ENGINE_ENABLE_AUDIO)
+        target_link_libraries(Platform PRIVATE ole32)
+    endif()
+elseif(UNIX AND NOT APPLE)
+    target_link_libraries(Platform PUBLIC dl)
 endif()
 
 # macOS-specific frameworks

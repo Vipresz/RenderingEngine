@@ -11,13 +11,18 @@ namespace Engine {
 namespace Platform {
 namespace UI {
 
+class FontLibrary;
+
 class NuklearUI {
 public:
     NuklearUI();
     ~NuklearUI();
     
-    // Initialize Nuklear
-    bool Initialize(GLFWwindow* window);
+    // Initialize Nuklear (optional custom fonts baked from menu/fonts)
+    bool Initialize(GLFWwindow* window, FontLibrary* fontLibrary = nullptr);
+    
+    FontLibrary* GetFontLibrary() { return m_fontLibrary; }
+    const FontLibrary* GetFontLibrary() const { return m_fontLibrary; }
     
     // Shutdown Nuklear
     void Shutdown();
@@ -44,6 +49,7 @@ private:
     struct nk_context* m_nkContext;
     bool m_nuklearInitialized;
     GLFWwindow* m_window;
+    FontLibrary* m_fontLibrary = nullptr;
 };
 
 } // namespace UI

@@ -33,13 +33,15 @@ static void glfw_error_callback(int error, const char* description) {
 }
 
 Window::Window() : mainWindow(nullptr), width(800), height(600), bufferWidth(0), bufferHeight(0),
-    lastX(0), lastY(0), xChange(0.0f), yChange(0.0f), scrollYChange(0.0f), mouseFirstMoved(true) {
+    lastX(0), lastY(0), xChange(0.0f), yChange(0.0f), scrollYChange(0.0f), mouseFirstMoved(true), cursorCaptured(false) {
     for (size_t i = 0; i < 1024; i++) keys[i] = false;
+    for (size_t i = 0; i < 8; i++) mouseButtons[i] = false;
 }
 
 Window::Window(GLint windowWidth, GLint windowHeight) : mainWindow(nullptr), width(windowWidth), height(windowHeight),
-    bufferWidth(0), bufferHeight(0), lastX(0), lastY(0), xChange(0.0f), yChange(0.0f), scrollYChange(0.0f), mouseFirstMoved(true) {
+    bufferWidth(0), bufferHeight(0), lastX(0), lastY(0), xChange(0.0f), yChange(0.0f), scrollYChange(0.0f), mouseFirstMoved(true), cursorCaptured(false) {
     for (size_t i = 0; i < 1024; i++) keys[i] = false;
+    for (size_t i = 0; i < 8; i++) mouseButtons[i] = false;
 }
 
 int Window::Initialize() {
@@ -183,7 +185,7 @@ int Window::Initialize() {
     glfwMakeContextCurrent(mainWindow);
 
     createCallbacks();
-    glfwSetInputMode(mainWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(mainWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     glewExperimental = GL_TRUE;
 
@@ -214,7 +216,58 @@ int Window::Initialize() {
 void Window::createCallbacks() {
     glfwSetKeyCallback(mainWindow, handleKeys);
     glfwSetCursorPosCallback(mainWindow, handleMouse);
+    glfwSetMouseButtonCallback(mainWindow, handleMouseButtons);
     glfwSetScrollCallback(mainWindow, handleScroll);
+}
+
+void Window::pollEvents() {
+    glfwPollEvents();
+    updateFramebufferSize();
+    if (mainWindow && bufferWidth > 0 && bufferHeight > 0) {
+        glViewport(0, 0, bufferWidth, bufferHeight);
+    }
+}
+
+void Window::updateFramebufferSize() {
+    if (!mainWindow) {
+        return;
+    }
+
+    GLint newBufferWidth = 0;
+    GLint newBufferHeight = 0;
+    glfwGetFramebufferSize(mainWindow, &newBufferWidth, &newBufferHeight);
+    if (newBufferWidth > 0 && newBufferHeight > 0) {
+        bufferWidth = newBufferWidth;
+        bufferHeight = newBufferHeight;
+    }
+
+    GLint newWindowWidth = 0;
+    GLint newWindowHeight = 0;
+    glfwGetWindowSize(mainWindow, &newWindowWidth, &newWindowHeight);
+    if (newWindowWidth > 0 && newWindowHeight > 0) {
+        width = newWindowWidth;
+        height = newWindowHeight;
+    }
+}
+
+bool Window::isMouseButtonDown(int glfwMouseButton) const {
+    if (glfwMouseButton < 0 || glfwMouseButton >= 8) {
+        return false;
+    }
+    return mouseButtons[glfwMouseButton];
+}
+
+void Window::SetCursorCaptured(bool captured) {
+    if (!mainWindow || cursorCaptured == captured) {
+        return;
+    }
+    cursorCaptured = captured;
+    glfwSetInputMode(mainWindow, GLFW_CURSOR, captured ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    if (captured) {
+        mouseFirstMoved = true;
+        xChange = 0.0f;
+        yChange = 0.0f;
+    }
 }
 
 GLfloat Window::getXChange() {
@@ -265,6 +318,17 @@ GLfloat Window::getScrollYChange() {
     GLfloat theChange = scrollYChange;
     scrollYChange = 0.0f;
     return theChange;
+}
+
+void Window::handleMouseButtons(GLFWwindow* window, int button, int action, int /*mods*/) {
+    Window* theWindow = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    if (button >= 0 && button < 8) {
+        if (action == GLFW_PRESS) {
+            theWindow->mouseButtons[button] = true;
+        } else if (action == GLFW_RELEASE) {
+            theWindow->mouseButtons[button] = false;
+        }
+    }
 }
 
 void Window::handleScroll(GLFWwindow* window, double xOffset, double yOffset) {

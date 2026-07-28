@@ -23,8 +23,8 @@ public:
 template<typename T>
 class ComponentPool : public IComponentPool {
 public:
-    static_assert(std::is_pod_v<T> || std::is_trivially_copyable_v<T>,
-                  "Components should be POD or trivially copyable");
+    static_assert(std::is_move_constructible_v<T> && std::is_move_assignable_v<T>,
+                  "Components must be movable");
 
     T& Add(EntityID entity) {
         assert(entity != INVALID_ENTITY);

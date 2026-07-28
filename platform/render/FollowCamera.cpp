@@ -30,20 +30,29 @@ void FollowCamera::SetTarget(EntityID entityID, ECS::Registry* registry) {
 }
 
 void FollowCamera::Update(float deltaTime) {
+    (void)deltaTime;
     UpdateCameraPosition();
 }
 
-void FollowCamera::HandleMouseInput(GLfloat xChange, GLfloat yChange) {
-    m_yaw += xChange * m_rotationSpeed;
-    m_pitch -= yChange * m_rotationSpeed;
+void FollowCamera::OnMouseMove(float deltaX, float deltaY) {
+    m_yaw += deltaX * m_rotationSpeed;
+    m_pitch -= deltaY * m_rotationSpeed;
     m_pitch = std::max(-80.0f, std::min(80.0f, m_pitch));
     UpdateCameraPosition();
 }
 
-void FollowCamera::HandleScrollInput(GLfloat scrollDelta) {
-    m_distance -= scrollDelta * m_zoomSpeed;
+void FollowCamera::OnScroll(float deltaY) {
+    m_distance -= deltaY * m_zoomSpeed;
     m_distance = std::max(m_minDistance, std::min(m_maxDistance, m_distance));
     UpdateCameraPosition();
+}
+
+void FollowCamera::HandleMouseInput(GLfloat xChange, GLfloat yChange) {
+    OnMouseMove(xChange, yChange);
+}
+
+void FollowCamera::HandleScrollInput(GLfloat scrollDelta) {
+    OnScroll(scrollDelta);
 }
 
 void FollowCamera::UpdateCameraPosition() {
@@ -84,8 +93,23 @@ void FollowCamera::UpdateCameraPosition() {
     m_cameraPosition = headWorldPos + glm::vec3(offsetX, offsetY, offsetZ);
 }
 
-glm::mat4 FollowCamera::CalculateViewMatrix() const {
+glm::mat4 FollowCamera::GetViewMatrix() const {
     return glm::lookAt(m_cameraPosition, m_lookAtTarget, glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
+glm::vec3 FollowCamera::GetEyePosition() const {
+    return m_cameraPosition;
+}
+
+bool FollowCamera::GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) const {
+    outForward = GetForwardDirection();
+    outRight = GetRightDirection();
+    return true;
+}
+
+float FollowCamera::GetPlanarFacingYawDegrees() const {
+    // Orbit yaw maps to character facing: Transform yaw 0 = -Z, camera behind at m_yaw 180
+    return m_yaw - 180.0f;
 }
 
 glm::vec3 FollowCamera::GetForwardDirection() const {
