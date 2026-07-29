@@ -35,6 +35,12 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/LayerInstancePolicy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ReplicationTier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ZoneScaleConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/ecs/PlayerItemOwnership.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/ecs/PlayerTrade.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ItemOwnershipReplication.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/TradeReplication.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/TradeSession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ChatMessage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/InterestManager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/RateLimiter.cpp
@@ -47,6 +53,8 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/TlsSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/systems/ReplicationSystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ItemOwnershipReplicationBinding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/TradeReplicationBinding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/physics/SimplePhysicsWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/audio/NullAudioBackend.cpp
 )
@@ -81,6 +89,7 @@ set(ENGINE_TEST_SOURCES
     network/SocketTest.cpp
     network/UdpChannelTest.cpp
     network/ReplicationSystemTest.cpp
+    network/ItemOwnershipReplicationBindingTest.cpp
     network/NetServerIntegrationTest.cpp
     network/TlsSessionTest.cpp
     network/CharacterMovementSimulatorTest.cpp
@@ -88,6 +97,10 @@ set(ENGINE_TEST_SOURCES
     core/CredentialStoreTest.cpp
     core/PasswordHasherTest.cpp
     core/LoadoutReplicationTest.cpp
+    core/ItemOwnershipReplicationTest.cpp
+    core/PlayerItemOwnershipComponentTest.cpp
+    core/TradeSessionTest.cpp
+    core/ChatMessageTest.cpp
     core/AuthorityHardeningTest.cpp
     core/ReplicationTierTest.cpp
     core/ScalePolicyTest.cpp
@@ -101,7 +114,7 @@ set(ENGINE_TEST_SOURCES
 )
 
 if(BUILD_ENGINE_PLATFORM)
-    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp network/NetServerScalePolicyMultiUserTest.cpp)
+    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp network/NetServerScalePolicyMultiUserTest.cpp network/AuthoritativeGameSimulatorOwnershipTest.cpp network/AuthoritativeGameSimulatorTradeTest.cpp)
 endif()
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})

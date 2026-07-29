@@ -85,6 +85,7 @@ public:
     void CollectRemotePlayerEntities(std::vector<EntityID>& out) const;
 
     EntityID EnsureRemoteEntity(Engine::Net::UserId userId, ECS::Registry& registry);
+    EntityID TryGetPlayerEntity(Engine::Net::UserId userId) const;
 
     const std::string& GetPeerDisplayName(Engine::Net::UserId userId) const;
 

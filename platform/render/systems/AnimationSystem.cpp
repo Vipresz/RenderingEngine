@@ -80,7 +80,9 @@ float ResolvePlaybackRate(const Components::AnimationComponent& animComp,
 } // namespace
 
 AnimationSystem::AnimationSystem() {
-    SetPriority(50); // Run after InputSystem (0) but before RenderSystem (100)
+    // After NetworkSystem (55) and RemoteLoadoutApplySystem (56) so remote animation
+    // state is applied before clips advance and skeleton poses are written.
+    SetPriority(58);
 }
 
 void AnimationSystem::Initialize(ECS::Registry& registry) {

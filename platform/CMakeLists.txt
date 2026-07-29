@@ -38,8 +38,16 @@ set(PLATFORM_SOURCES
     network/NetServer.cpp
     network/TlsSession.cpp
     network/AuthoritativeGameSimulator.cpp
+    network/ItemOwnershipReplicationBinding.cpp
+    network/TradeReplicationBinding.cpp
     network/systems/NetworkSystem.cpp
     network/systems/ReplicationSystem.cpp
+    ../core/ecs/PlayerItemOwnership.cpp
+    ../core/ecs/PlayerTrade.cpp
+    ../core/network/ItemOwnershipReplication.cpp
+    ../core/network/TradeReplication.cpp
+    ../core/network/TradeSession.cpp
+    ../core/network/ChatMessage.cpp
     ../core/network/CharacterMovementSimulator.cpp
     ../core/network/CryptoSha256.cpp
     ../core/network/SecureCompare.cpp

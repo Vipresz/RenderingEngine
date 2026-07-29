@@ -335,6 +335,33 @@ void Skeleton::GetFinalBoneMatrices(std::vector<glm::mat4>& boneMatrices) const 
     }
 }
 
+Skeleton Skeleton::Clone() const {
+    Skeleton copy;
+    copy.m_loaded = m_loaded;
+    copy.m_bindPoseActive = true;
+    copy.m_bones = m_bones;
+    copy.m_maxBoneCount = m_maxBoneCount;
+    copy.m_rootBoneName = m_rootBoneName;
+    copy.m_hierarchyRootName = m_hierarchyRootName;
+    copy.m_boneCounter = m_boneCounter;
+    copy.m_globalInverseTransform = m_globalInverseTransform;
+    copy.m_matrixFormulaMode = m_matrixFormulaMode;
+    copy.m_boneParentMap = m_boneParentMap;
+    copy.m_nodeParentMap = m_nodeParentMap;
+    copy.m_nodeBindLocal = m_nodeBindLocal;
+    copy.m_nodeChildren = m_nodeChildren;
+
+    copy.m_boneArray.assign(copy.m_maxBoneCount, nullptr);
+    for (auto& pair : copy.m_bones) {
+        Bone& bone = pair.second;
+        if (bone.id >= 0 && bone.id < static_cast<int>(copy.m_boneArray.size())) {
+            copy.m_boneArray[bone.id] = &bone;
+        }
+    }
+    copy.ResetToBindPose();
+    return copy;
+}
+
 } // namespace Render
 } // namespace Platform
 } // namespace Engine

@@ -3,11 +3,16 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
+#include <functional>
+
 namespace Engine {
 namespace Platform {
 
 class Window {
 public:
+    using EscapeHandler = std::function<bool()>;
+    using CharInputHandler = std::function<void(unsigned int codepoint)>;
+
     Window();
     Window(GLint windowWidth, GLint windowHeight);
     
@@ -19,6 +24,8 @@ public:
     bool* getsKeys() { return keys; }
     bool isMouseButtonDown(int glfwMouseButton) const;
     void SetCursorCaptured(bool captured);
+    void SetEscapeHandler(EscapeHandler handler) { m_escapeHandler = std::move(handler); }
+    void SetCharInputHandler(CharInputHandler handler) { m_charInputHandler = std::move(handler); }
     
     GLfloat getXChange();
     GLfloat getYChange();
@@ -53,8 +60,11 @@ private:
     GLfloat yChange;
     GLfloat scrollYChange;
     bool mouseFirstMoved;
+    EscapeHandler m_escapeHandler;
+    CharInputHandler m_charInputHandler;
     
     void createCallbacks();
+    static void handleChars(GLFWwindow* window, unsigned int codepoint);
     static void handleKeys(GLFWwindow* window, int key, int code, int action, int mode);
     static void handleMouse(GLFWwindow* window, double xPos, double yPos);
     static void handleMouseButtons(GLFWwindow* window, int button, int action, int mods);

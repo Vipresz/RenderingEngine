@@ -1,7 +1,9 @@
 #include "network/AuthoritativeGameSimulator.h"
 
 #include "Logger.h"
+#include "core/ecs/components/PlayerItemOwnershipComponent.h"
 #include "core/network/CharacterMovementSimulator.h"
+#include "core/network/ChatMessage.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/TransformComponent.h"
 
@@ -21,6 +23,8 @@ namespace Networking {
 
 AuthoritativeGameSimulator::AuthoritativeGameSimulator(NetServer& server) : m_server(server) {
     RegisterLoadoutBinding();
+    RegisterOwnershipBinding();
+    RegisterTradeBinding();
     m_replication.SetSnapshotSendHandler([this](const Engine::Net::EntitySnapshot& snapshot) {
         Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
             Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), 0);
@@ -56,6 +60,32 @@ void AuthoritativeGameSimulator::RegisterLoadoutBinding() {
         },
         [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
             // Server is the publisher; clients apply loadout via their own bindings.
+            return true;
+        }});
+}
+
+void AuthoritativeGameSimulator::RegisterOwnershipBinding() {
+    Engine::Net::ReplicationComponentDescriptor ownershipDesc;
+    ownershipDesc.id = Engine::Net::kItemOwnershipReplicationComponent;
+    ownershipDesc.name = "ItemOwnership";
+    m_replication.GetRegistry().Register(std::move(ownershipDesc));
+
+    m_replication.RegisterComponentBinding(Systems::ReplicationComponentBinding{
+        Engine::Net::kItemOwnershipReplicationComponent,
+        [this](EntityID entity, ECS::Registry& /*registry*/, Engine::Net::NetBuffer& out) {
+            const auto userIt = m_entityToUser.find(entity);
+            if (userIt == m_entityToUser.end()) {
+                return false;
+            }
+            const auto playerIt = m_players.find(userIt->second);
+            if (playerIt == m_players.end() ||
+                playerIt->second.ownership.ownerUserId == Engine::Net::kInvalidUserId) {
+                return false;
+            }
+            out = playerIt->second.ownership.Serialize();
+            return true;
+        },
+        [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
             return true;
         }});
 }
@@ -109,6 +139,26 @@ bool AuthoritativeGameSimulator::HandleGenericData(Engine::Net::UserId userId,
         return true;
     }
 
+    if (payload.channel == Engine::Net::kTradeChannel) {
+        Engine::Net::TradeCommand command;
+        if (!Engine::Net::DeserializeTradeCommand(Engine::Net::NetBuffer(payload.data), command)) {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingTradeCommands.push_back(PendingTradeCommand{userId, std::move(command)});
+        return true;
+    }
+
+    if (payload.channel == Engine::Net::kChatChannel) {
+        Engine::Net::ChatCommand command;
+        if (!Engine::Net::DeserializeChatCommand(Engine::Net::NetBuffer(payload.data), command)) {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingChatCommands.push_back(PendingChatCommand{userId, std::move(command)});
+        return true;
+    }
+
     return false;
 }
 
@@ -126,22 +176,33 @@ void AuthoritativeGameSimulator::DrainQueues() {
     std::deque<Engine::Net::UserId> disconnects;
     std::deque<PendingCommand> commands;
     std::deque<PendingLoadout> loadouts;
+    std::deque<PendingTradeCommand> tradeCommands;
+    std::deque<PendingChatCommand> chatCommands;
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         logins.swap(m_pendingLogins);
         disconnects.swap(m_pendingDisconnects);
         commands.swap(m_pendingCommands);
         loadouts.swap(m_pendingLoadouts);
+        tradeCommands.swap(m_pendingTradeCommands);
+        chatCommands.swap(m_pendingChatCommands);
     }
 
     for (const PendingLogin& login : logins) {
         SpawnPlayer(login.userId, login.displayName);
     }
     for (Engine::Net::UserId userId : disconnects) {
+        CancelTrade(userId);
         DespawnPlayer(userId);
     }
     for (PendingLoadout& entry : loadouts) {
         ApplyLoadout(entry.userId, std::move(entry.loadout));
+    }
+    for (PendingTradeCommand& entry : tradeCommands) {
+        ApplyTradeCommand(entry.userId, std::move(entry.command));
+    }
+    for (PendingChatCommand& entry : chatCommands) {
+        ApplyChatMessage(entry.userId, std::move(entry.command));
     }
 
     std::vector<Engine::Net::TransformStatePayload> peerEnqueuePayloads;
@@ -187,6 +248,7 @@ void AuthoritativeGameSimulator::SpawnPlayer(Engine::Net::UserId userId, const s
     PlayerState player;
     player.entity = entity.id;
     player.displayName = displayName;
+    player.ownership.ownerUserId = userId;
     player.movement.position = spawnPosition;
     player.movement.groundLevel = spawnPosition.y;
     if (m_terrainSampler) {
@@ -222,6 +284,8 @@ void AuthoritativeGameSimulator::SpawnPlayer(Engine::Net::UserId userId, const s
 }
 
 void AuthoritativeGameSimulator::DespawnPlayer(Engine::Net::UserId userId) {
+    CancelTrade(userId);
+
     auto it = m_players.find(userId);
     if (it == m_players.end()) {
         return;
@@ -248,6 +312,107 @@ void AuthoritativeGameSimulator::ApplyLoadout(Engine::Net::UserId userId,
     }
     it->second.loadout = std::move(loadout);
     it->second.snapshotDirty = true;
+}
+
+void AuthoritativeGameSimulator::ApplyOwnership(Engine::Net::UserId userId,
+                                                Engine::Net::ReplicatedItemOwnership ownership) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return;
+    }
+    if (ownership.ownerUserId == Engine::Net::kInvalidUserId) {
+        ownership.ownerUserId = userId;
+    }
+    if (ownership.ownerUserId != userId) {
+        return;
+    }
+    if (ownership.items.size() > Engine::ECS::kMaxOwnedItemStacks) {
+        ownership.items.resize(Engine::ECS::kMaxOwnedItemStacks);
+    }
+    it->second.ownership = std::move(ownership);
+    it->second.snapshotDirty = true;
+}
+
+bool AuthoritativeGameSimulator::GrantOwnedItem(Engine::Net::UserId userId,
+                                                const std::string& itemId,
+                                                uint32_t quantity,
+                                                uint64_t instanceId) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return false;
+    }
+
+    ECS::PlayerItemOwnershipComponent component =
+        Engine::Net::ToOwnershipComponent(it->second.ownership);
+    if (!component.GrantItem(itemId, quantity, instanceId)) {
+        return false;
+    }
+    it->second.ownership = Engine::Net::FromOwnershipComponent(component);
+    it->second.snapshotDirty = true;
+    return true;
+}
+
+bool AuthoritativeGameSimulator::RemoveOwnedItem(Engine::Net::UserId userId,
+                                                 const std::string& itemId,
+                                                 uint32_t quantity) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return false;
+    }
+
+    ECS::PlayerItemOwnershipComponent component =
+        Engine::Net::ToOwnershipComponent(it->second.ownership);
+    if (!component.RemoveItem(itemId, quantity)) {
+        return false;
+    }
+    it->second.ownership = Engine::Net::FromOwnershipComponent(component);
+    it->second.snapshotDirty = true;
+    return true;
+}
+
+bool AuthoritativeGameSimulator::RemoveOwnedItemInstance(Engine::Net::UserId userId,
+                                                         uint64_t instanceId) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return false;
+    }
+
+    ECS::PlayerItemOwnershipComponent component =
+        Engine::Net::ToOwnershipComponent(it->second.ownership);
+    if (!component.RemoveInstance(instanceId)) {
+        return false;
+    }
+    it->second.ownership = Engine::Net::FromOwnershipComponent(component);
+    it->second.snapshotDirty = true;
+    return true;
+}
+
+uint32_t AuthoritativeGameSimulator::CountOwnedItem(Engine::Net::UserId userId,
+                                                    const std::string& itemId) const {
+    const auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return 0;
+    }
+    return Engine::Net::ToOwnershipComponent(it->second.ownership).CountItem(itemId);
+}
+
+bool AuthoritativeGameSimulator::HasOwnedItem(Engine::Net::UserId userId,
+                                              const std::string& itemId,
+                                              uint32_t quantity) const {
+    const auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return false;
+    }
+    return Engine::Net::ToOwnershipComponent(it->second.ownership).HasItem(itemId, quantity);
+}
+
+const Engine::Net::ReplicatedItemOwnership* AuthoritativeGameSimulator::GetOwnedItems(
+    Engine::Net::UserId userId) const {
+    const auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return nullptr;
+    }
+    return &it->second.ownership;
 }
 
 void AuthoritativeGameSimulator::ApplyMovement(Engine::Net::UserId userId,
@@ -639,6 +804,339 @@ Engine::Net::TransformStatePayload AuthoritativeGameSimulator::BuildTransformPay
     payload.groundLevel = player.movement.groundLevel;
     payload.animationState = static_cast<uint8_t>(player.movement.animationState);
     return payload;
+}
+
+void AuthoritativeGameSimulator::RegisterTradeBinding() {
+    Engine::Net::ReplicationComponentDescriptor tradeDesc;
+    tradeDesc.id = Engine::Net::kTradeReplicationComponent;
+    tradeDesc.name = "Trade";
+    m_replication.GetRegistry().Register(std::move(tradeDesc));
+
+    m_replication.RegisterComponentBinding(Systems::ReplicationComponentBinding{
+        Engine::Net::kTradeReplicationComponent,
+        [this](EntityID entity, ECS::Registry& /*registry*/, Engine::Net::NetBuffer& out) {
+            const auto userIt = m_entityToUser.find(entity);
+            if (userIt == m_entityToUser.end()) {
+                return false;
+            }
+            const auto playerIt = m_players.find(userIt->second);
+            if (playerIt == m_players.end() || playerIt->second.trade.sessionId == 0) {
+                return false;
+            }
+            out = playerIt->second.trade.Serialize();
+            return true;
+        },
+        [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
+            return true;
+        }});
+}
+
+bool AuthoritativeGameSimulator::PlayerAvailableForTrade(Engine::Net::UserId userId) const {
+    if (m_players.find(userId) == m_players.end()) {
+        return false;
+    }
+    return m_userTradeSession.find(userId) == m_userTradeSession.end();
+}
+
+Engine::Net::TradeSession* AuthoritativeGameSimulator::FindTradeSessionFor(Engine::Net::UserId userId) {
+    const auto mapping = m_userTradeSession.find(userId);
+    if (mapping == m_userTradeSession.end()) {
+        return nullptr;
+    }
+    const auto sessionIt = m_tradeSessions.find(mapping->second);
+    if (sessionIt == m_tradeSessions.end()) {
+        return nullptr;
+    }
+    return &sessionIt->second;
+}
+
+const Engine::Net::TradeSession* AuthoritativeGameSimulator::FindTradeSessionFor(
+    Engine::Net::UserId userId) const {
+    const auto mapping = m_userTradeSession.find(userId);
+    if (mapping == m_userTradeSession.end()) {
+        return nullptr;
+    }
+    const auto sessionIt = m_tradeSessions.find(mapping->second);
+    if (sessionIt == m_tradeSessions.end()) {
+        return nullptr;
+    }
+    return &sessionIt->second;
+}
+
+void AuthoritativeGameSimulator::MarkTradeParticipantsDirty(const Engine::Net::TradeSession& session) {
+    if (auto initiatorIt = m_players.find(session.initiatorUserId); initiatorIt != m_players.end()) {
+        initiatorIt->second.snapshotDirty = true;
+    }
+    if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
+        partnerIt->second.snapshotDirty = true;
+    }
+}
+
+void AuthoritativeGameSimulator::SyncTradeStateForSession(const Engine::Net::TradeSession& session) {
+    const ECS::PlayerTradeComponent initiatorView =
+        Engine::Net::BuildTradeView(session, session.initiatorUserId);
+    const ECS::PlayerTradeComponent partnerView =
+        Engine::Net::BuildTradeView(session, session.partnerUserId);
+
+    if (auto initiatorIt = m_players.find(session.initiatorUserId); initiatorIt != m_players.end()) {
+        initiatorIt->second.trade = Engine::Net::FromTradeView(initiatorView);
+        initiatorIt->second.snapshotDirty = true;
+    }
+    if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
+        partnerIt->second.trade = Engine::Net::FromTradeView(partnerView);
+        partnerIt->second.snapshotDirty = true;
+    }
+}
+
+void AuthoritativeGameSimulator::EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase) {
+    const auto sessionIt = m_tradeSessions.find(sessionId);
+    if (sessionIt == m_tradeSessions.end()) {
+        return;
+    }
+
+    Engine::Net::TradeSession session = sessionIt->second;
+    session.phase = finalPhase;
+    SyncTradeStateForSession(session);
+
+    m_userTradeSession.erase(session.initiatorUserId);
+    m_userTradeSession.erase(session.partnerUserId);
+    m_tradeSessions.erase(sessionIt);
+
+    if (auto initiatorIt = m_players.find(session.initiatorUserId); initiatorIt != m_players.end()) {
+        initiatorIt->second.trade = {};
+        initiatorIt->second.snapshotDirty = true;
+    }
+    if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
+        partnerIt->second.trade = {};
+        partnerIt->second.snapshotDirty = true;
+    }
+}
+
+bool AuthoritativeGameSimulator::TryExecuteTrade(Engine::Net::TradeSession& session) {
+    if (!session.BothLocked() || !session.IsOpen()) {
+        return false;
+    }
+
+    auto initiatorIt = m_players.find(session.initiatorUserId);
+    auto partnerIt = m_players.find(session.partnerUserId);
+    if (initiatorIt == m_players.end() || partnerIt == m_players.end()) {
+        return false;
+    }
+
+    ECS::PlayerItemOwnershipComponent initiatorOwnership =
+        Engine::Net::ToOwnershipComponent(initiatorIt->second.ownership);
+    ECS::PlayerItemOwnershipComponent partnerOwnership =
+        Engine::Net::ToOwnershipComponent(partnerIt->second.ownership);
+
+    if (!Engine::Net::ExecuteTradeExchange(initiatorOwnership,
+                                           partnerOwnership,
+                                           session.initiatorOffer,
+                                           session.partnerOffer)) {
+        return false;
+    }
+
+    initiatorIt->second.ownership = Engine::Net::FromOwnershipComponent(initiatorOwnership);
+    partnerIt->second.ownership = Engine::Net::FromOwnershipComponent(partnerOwnership);
+    initiatorIt->second.snapshotDirty = true;
+    partnerIt->second.snapshotDirty = true;
+
+    session.phase = ECS::TradePhase::Completed;
+    SyncTradeStateForSession(session);
+    EndTradeSession(session.sessionId, ECS::TradePhase::Completed);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::RequestTrade(Engine::Net::UserId fromUserId,
+                                              Engine::Net::UserId toUserId) {
+    if (fromUserId == Engine::Net::kInvalidUserId || toUserId == Engine::Net::kInvalidUserId ||
+        fromUserId == toUserId) {
+        return false;
+    }
+    if (!PlayerAvailableForTrade(fromUserId) || !PlayerAvailableForTrade(toUserId)) {
+        return false;
+    }
+
+    Engine::Net::TradeSession session;
+    session.sessionId = m_nextTradeSessionId++;
+    session.initiatorUserId = fromUserId;
+    session.partnerUserId = toUserId;
+    session.phase = ECS::TradePhase::Requested;
+
+    m_tradeSessions.emplace(session.sessionId, session);
+    m_userTradeSession[fromUserId] = session.sessionId;
+    m_userTradeSession[toUserId] = session.sessionId;
+    SyncTradeStateForSession(session);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::RespondToTrade(Engine::Net::UserId responderUserId,
+                                                Engine::Net::UserId requesterUserId,
+                                                bool accept) {
+    Engine::Net::TradeSession* session = FindTradeSessionFor(responderUserId);
+    if (session == nullptr || session->phase != ECS::TradePhase::Requested ||
+        session->initiatorUserId != requesterUserId || session->partnerUserId != responderUserId) {
+        return false;
+    }
+
+    if (!accept) {
+        EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
+        return true;
+    }
+
+    session->phase = ECS::TradePhase::Open;
+    SyncTradeStateForSession(*session);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::CancelTrade(Engine::Net::UserId userId) {
+    Engine::Net::TradeSession* session = FindTradeSessionFor(userId);
+    if (session == nullptr) {
+        return false;
+    }
+    EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
+                                               const std::vector<Engine::Net::TradeOfferItem>& offer) {
+    Engine::Net::TradeSession* session = FindTradeSessionFor(userId);
+    if (session == nullptr || !session->IsOpen()) {
+        return false;
+    }
+    if (!Engine::Net::IsValidTradeOffer(offer)) {
+        return false;
+    }
+
+    const auto playerIt = m_players.find(userId);
+    if (playerIt == m_players.end()) {
+        return false;
+    }
+    const ECS::PlayerItemOwnershipComponent ownership =
+        Engine::Net::ToOwnershipComponent(playerIt->second.ownership);
+    if (!Engine::Net::CanAffordOffer(ownership, offer)) {
+        return false;
+    }
+
+    std::vector<Engine::Net::TradeOfferItem>* userOffer = session->OfferFor(userId);
+    if (userOffer == nullptr) {
+        return false;
+    }
+    *userOffer = offer;
+    session->initiatorLocked = false;
+    session->partnerLocked = false;
+    SyncTradeStateForSession(*session);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::LockTradeOffer(Engine::Net::UserId userId) {
+    Engine::Net::TradeSession* session = FindTradeSessionFor(userId);
+    if (session == nullptr || !session->IsOpen()) {
+        return false;
+    }
+
+    bool* userLock = session->LockFor(userId);
+    std::vector<Engine::Net::TradeOfferItem>* userOffer = session->OfferFor(userId);
+    const auto playerIt = m_players.find(userId);
+    if (userLock == nullptr || userOffer == nullptr || playerIt == m_players.end()) {
+        return false;
+    }
+
+    const ECS::PlayerItemOwnershipComponent ownership =
+        Engine::Net::ToOwnershipComponent(playerIt->second.ownership);
+    if (!Engine::Net::CanAffordOffer(ownership, *userOffer)) {
+        return false;
+    }
+
+    *userLock = true;
+    SyncTradeStateForSession(*session);
+    TryExecuteTrade(*session);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::UnlockTradeOffer(Engine::Net::UserId userId) {
+    Engine::Net::TradeSession* session = FindTradeSessionFor(userId);
+    if (session == nullptr || !session->IsOpen()) {
+        return false;
+    }
+
+    bool* userLock = session->LockFor(userId);
+    if (userLock == nullptr) {
+        return false;
+    }
+    *userLock = false;
+    SyncTradeStateForSession(*session);
+    return true;
+}
+
+const Engine::Net::TradeSession* AuthoritativeGameSimulator::GetTradeSessionFor(
+    Engine::Net::UserId userId) const {
+    return FindTradeSessionFor(userId);
+}
+
+void AuthoritativeGameSimulator::ApplyTradeCommand(Engine::Net::UserId userId,
+                                                   Engine::Net::TradeCommand command) {
+    switch (command.action) {
+        case Engine::Net::TradeAction::Request:
+            RequestTrade(userId, command.targetUserId);
+            break;
+        case Engine::Net::TradeAction::Accept:
+            RespondToTrade(userId, command.targetUserId, true);
+            break;
+        case Engine::Net::TradeAction::Decline:
+            RespondToTrade(userId, command.targetUserId, false);
+            break;
+        case Engine::Net::TradeAction::Cancel:
+            CancelTrade(userId);
+            break;
+        case Engine::Net::TradeAction::SetOffer:
+            SetTradeOffer(userId, command.offer);
+            break;
+        case Engine::Net::TradeAction::Lock:
+            LockTradeOffer(userId);
+            break;
+        case Engine::Net::TradeAction::Unlock:
+            UnlockTradeOffer(userId);
+            break;
+        default:
+            break;
+    }
+}
+
+void AuthoritativeGameSimulator::ApplyChatMessage(Engine::Net::UserId userId,
+                                                    Engine::Net::ChatCommand command) {
+    const auto playerIt = m_players.find(userId);
+    if (playerIt == m_players.end()) {
+        return;
+    }
+
+    command.text = Engine::Net::SanitizeChatText(std::move(command.text));
+    if (!Engine::Net::IsValidChatText(command.text)) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    const double nowSeconds =
+        std::chrono::duration<double>(now.time_since_epoch()).count();
+    constexpr double kMinChatIntervalSeconds = 0.25;
+    const auto lastIt = m_lastChatSendSeconds.find(userId);
+    if (lastIt != m_lastChatSendSeconds.end() &&
+        nowSeconds - lastIt->second < kMinChatIntervalSeconds) {
+        return;
+    }
+    m_lastChatSendSeconds[userId] = nowSeconds;
+
+    Engine::Net::ChatMessage message;
+    message.userId = userId;
+    message.displayName = playerIt->second.displayName;
+    message.text = command.text;
+    message.tick = m_tickNumber;
+
+    Engine::Net::GenericDataPayload payload;
+    payload.userId = userId;
+    payload.tick = message.tick;
+    payload.channel = Engine::Net::kChatChannel;
+    payload.data = Engine::Net::SerializeChatMessage(message).Data();
+    m_server.BroadcastGenericData(payload);
 }
 
 } // namespace Networking

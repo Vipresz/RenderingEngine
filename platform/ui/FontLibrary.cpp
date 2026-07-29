@@ -8,6 +8,7 @@
 #include "nuklear.h"
 
 #include <fstream>
+#include <vector>
 
 using EngineLogging::Logger;
 
@@ -22,6 +23,7 @@ const char* FontLibrary::RoleName(FontRole role) {
         case FontRole::UiSmall: return "UiSmall";
         case FontRole::Mono: return "Mono";
         case FontRole::Hud: return "Hud";
+        case FontRole::Chat: return "Chat";
         default: return "Unknown";
     }
 }
@@ -46,14 +48,16 @@ void FontLibrary::InitSlot(FontRole role, const char* fileName, float size) {
     slot.font = nullptr;
 }
 
-bool FontLibrary::TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot) {
+bool FontLibrary::TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logMissing) {
     if (!atlas || !slot.fileName || slot.resolvedPath.empty()) {
         return false;
     }
 
     std::ifstream probe(slot.resolvedPath, std::ios::binary);
     if (!probe.good()) {
-        LOG_WARNING_FMT("FontLibrary", "Font not found: %s", slot.resolvedPath.c_str());
+        if (logMissing) {
+            LOG_WARNING_FMT("FontLibrary", "Font not found: %s", slot.resolvedPath.c_str());
+        }
         return false;
     }
     probe.close();
@@ -96,6 +100,40 @@ bool FontLibrary::BakeIntoAtlas(struct nk_font_atlas* atlas) {
         m_slots[static_cast<int>(FontRole::UiBold)].font = hud;
     }
     return anyLoaded;
+}
+
+bool FontLibrary::LoadChatFont(struct nk_font_atlas* atlas) {
+    if (!atlas) {
+        return false;
+    }
+
+    InitSlot(FontRole::Chat, "arial.ttf", m_config.chatSize);
+    Slot& slot = m_slots[static_cast<int>(FontRole::Chat)];
+
+    std::vector<std::string> candidates;
+    if (!m_config.fontsRoot.empty()) {
+        candidates.push_back(ResolvePath("arial.ttf"));
+    }
+#if defined(_WIN32)
+    candidates.emplace_back("C:/Windows/Fonts/arial.ttf");
+    candidates.emplace_back("C:/Windows/Fonts/Arial.ttf");
+#elif defined(__APPLE__)
+    candidates.emplace_back("/Library/Fonts/Arial.ttf");
+    candidates.emplace_back("/System/Library/Fonts/Supplemental/Arial.ttf");
+#else
+    candidates.emplace_back("/usr/share/fonts/truetype/msttcorefonts/Arial.ttf");
+    candidates.emplace_back("/usr/share/fonts/truetype/msttcorefonts/arial.ttf");
+    candidates.emplace_back("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf");
+#endif
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        slot.resolvedPath = candidates[i];
+        const bool logMissing = i + 1 == candidates.size();
+        if (TryLoadSlot(atlas, slot, logMissing)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void FontLibrary::ApplyDefaultFont(struct nk_context* ctx) const {

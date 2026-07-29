@@ -63,6 +63,9 @@ public:
     // Required when mesh and skeleton are loaded via separate Assimp imports.
     bool AlignBoneIdsToMeshOrder(const std::vector<std::string>& meshBoneNamesInIndexOrder);
     
+    // Deep copy of hierarchy/bind data for per-character pose state (clips stay shared).
+    Skeleton Clone() const;
+    
     void SetMatrixFormulaMode(int mode) { m_matrixFormulaMode = mode; }
     int GetMatrixFormulaMode() const { return m_matrixFormulaMode; }
 

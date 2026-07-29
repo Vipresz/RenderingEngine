@@ -17,6 +17,7 @@ enum class FontRole {
     UiSmall,
     Mono,
     Hud,
+    Chat,
     Count
 };
 
@@ -29,6 +30,7 @@ public:
         float uiSmallSize = 14.0f;
         float monoSize = 16.0f;
         float hudSize = 20.0f;
+        float chatSize = 12.0f;
     };
 
     void SetConfig(const Config& config) { m_config = config; }
@@ -36,6 +38,9 @@ public:
 
     // Call between nk_glfw3_font_stash_begin/end. Returns false if no custom fonts loaded.
     bool BakeIntoAtlas(struct nk_font_atlas* atlas);
+
+    // Loads Arial (or platform equivalent) for in-game chat text.
+    bool LoadChatFont(struct nk_font_atlas* atlas);
 
     void ApplyDefaultFont(struct nk_context* ctx) const;
 
@@ -60,7 +65,7 @@ private:
     };
 
     void InitSlot(FontRole role, const char* fileName, float size);
-    bool TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot);
+    bool TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logMissing = true);
     std::string ResolvePath(const char* fileName) const;
 
     Config m_config;

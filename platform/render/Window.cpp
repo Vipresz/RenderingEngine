@@ -215,6 +215,7 @@ int Window::Initialize() {
 
 void Window::createCallbacks() {
     glfwSetKeyCallback(mainWindow, handleKeys);
+    glfwSetCharCallback(mainWindow, handleChars);
     glfwSetCursorPosCallback(mainWindow, handleMouse);
     glfwSetMouseButtonCallback(mainWindow, handleMouseButtons);
     glfwSetScrollCallback(mainWindow, handleScroll);
@@ -286,7 +287,9 @@ void Window::handleKeys(GLFWwindow* window, int key, int code, int action, int m
     Window* theWindow = static_cast<Window*>(glfwGetWindowUserPointer(window));
 
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        glfwSetWindowShouldClose(window, GL_TRUE);
+        if (!theWindow->m_escapeHandler || !theWindow->m_escapeHandler()) {
+            glfwSetWindowShouldClose(window, GL_TRUE);
+        }
     }
 
     if (key >= 0 && key < 1024) {
@@ -295,6 +298,13 @@ void Window::handleKeys(GLFWwindow* window, int key, int code, int action, int m
         } else if (action == GLFW_RELEASE) {
             theWindow->keys[key] = false;
         }
+    }
+}
+
+void Window::handleChars(GLFWwindow* window, unsigned int codepoint) {
+    Window* theWindow = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    if (theWindow && theWindow->m_charInputHandler) {
+        theWindow->m_charInputHandler(codepoint);
     }
 }
 

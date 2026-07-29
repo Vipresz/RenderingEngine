@@ -3,7 +3,11 @@
 #include "core/ecs/Registry.h"
 #include "core/network/CharacterMovementSimulator.h"
 #include "core/network/LoadoutReplication.h"
+#include "core/network/ItemOwnershipReplication.h"
+#include "core/network/ChatMessage.h"
 #include "core/network/MovementCommand.h"
+#include "core/network/TradeReplication.h"
+#include "core/network/TradeSession.h"
 #include "core/network/NetTypes.h"
 #include "core/network/ReplicationTypes.h"
 #include "core/terrain/HeightmapTerrain.h"
@@ -51,6 +55,26 @@ public:
     // Call from the server tick thread only.
     void Update(float deltaTime);
 
+    bool GrantOwnedItem(Engine::Net::UserId userId,
+                        const std::string& itemId,
+                        uint32_t quantity = 1,
+                        uint64_t instanceId = 0);
+    bool RemoveOwnedItem(Engine::Net::UserId userId, const std::string& itemId, uint32_t quantity = 1);
+    bool RemoveOwnedItemInstance(Engine::Net::UserId userId, uint64_t instanceId);
+    uint32_t CountOwnedItem(Engine::Net::UserId userId, const std::string& itemId) const;
+    bool HasOwnedItem(Engine::Net::UserId userId, const std::string& itemId, uint32_t quantity = 1) const;
+    const Engine::Net::ReplicatedItemOwnership* GetOwnedItems(Engine::Net::UserId userId) const;
+
+    bool RequestTrade(Engine::Net::UserId fromUserId, Engine::Net::UserId toUserId);
+    bool RespondToTrade(Engine::Net::UserId responderUserId,
+                        Engine::Net::UserId requesterUserId,
+                        bool accept);
+    bool CancelTrade(Engine::Net::UserId userId);
+    bool SetTradeOffer(Engine::Net::UserId userId, const std::vector<Engine::Net::TradeOfferItem>& offer);
+    bool LockTradeOffer(Engine::Net::UserId userId);
+    bool UnlockTradeOffer(Engine::Net::UserId userId);
+    const Engine::Net::TradeSession* GetTradeSessionFor(Engine::Net::UserId userId) const;
+
     const ServerTickMetrics& GetLastTickMetrics() const { return m_lastTickMetrics; }
     const ServerTickMetrics& GetSessionMetrics() const { return m_sessionMetrics; }
 
@@ -60,6 +84,8 @@ private:
         Engine::Net::CharacterMovementState movement;
         std::string displayName;
         Engine::Net::ReplicatedLoadout loadout;
+        Engine::Net::ReplicatedItemOwnership ownership;
+        Engine::Net::ReplicatedPlayerTrade trade;
         uint64_t lastProcessedTick = 0;
         bool snapshotDirty = false;
         std::unordered_set<Engine::Net::UserId> visiblePeers;
@@ -80,13 +106,40 @@ private:
         Engine::Net::ReplicatedLoadout loadout;
     };
 
+    struct PendingOwnership {
+        Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
+        Engine::Net::ReplicatedItemOwnership ownership;
+    };
+
+    struct PendingTradeCommand {
+        Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
+        Engine::Net::TradeCommand command;
+    };
+
+    struct PendingChatCommand {
+        Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
+        Engine::Net::ChatCommand command;
+    };
+
     void DrainQueues();
     void SpawnPlayer(Engine::Net::UserId userId, const std::string& displayName);
     void DespawnPlayer(Engine::Net::UserId userId);
     void ApplyMovement(Engine::Net::UserId userId, Engine::Net::MovementCommand command);
     bool ApplyMovementSimulation(Engine::Net::UserId userId, Engine::Net::MovementCommand& command);
     void ApplyLoadout(Engine::Net::UserId userId, Engine::Net::ReplicatedLoadout loadout);
+    void ApplyOwnership(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
     void RegisterLoadoutBinding();
+    void RegisterOwnershipBinding();
+    void RegisterTradeBinding();
+    void ApplyTradeCommand(Engine::Net::UserId userId, Engine::Net::TradeCommand command);
+    void ApplyChatMessage(Engine::Net::UserId userId, Engine::Net::ChatCommand command);
+    void SyncTradeStateForSession(const Engine::Net::TradeSession& session);
+    void EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase);
+    Engine::Net::TradeSession* FindTradeSessionFor(Engine::Net::UserId userId);
+    const Engine::Net::TradeSession* FindTradeSessionFor(Engine::Net::UserId userId) const;
+    bool TryExecuteTrade(Engine::Net::TradeSession& session);
+    void MarkTradeParticipantsDirty(const Engine::Net::TradeSession& session);
+    bool PlayerAvailableForTrade(Engine::Net::UserId userId) const;
     void BroadcastAuthoritativeTransform(Engine::Net::UserId userId,
                                          const PlayerState& player,
                                          uint64_t tick);
@@ -131,6 +184,13 @@ private:
     std::deque<Engine::Net::UserId> m_pendingDisconnects;
     std::deque<PendingCommand> m_pendingCommands;
     std::deque<PendingLoadout> m_pendingLoadouts;
+    std::deque<PendingOwnership> m_pendingOwnership;
+    std::deque<PendingTradeCommand> m_pendingTradeCommands;
+    std::deque<PendingChatCommand> m_pendingChatCommands;
+    std::unordered_map<Engine::Net::UserId, double> m_lastChatSendSeconds;
+    std::unordered_map<uint64_t, Engine::Net::TradeSession> m_tradeSessions;
+    std::unordered_map<Engine::Net::UserId, uint64_t> m_userTradeSession;
+    uint64_t m_nextTradeSessionId = 1;
     std::deque<Engine::Net::UserId> m_deferredVisibilityUpdates;
     std::unordered_set<Engine::Net::UserId> m_deferredVisibilityPending;
 };

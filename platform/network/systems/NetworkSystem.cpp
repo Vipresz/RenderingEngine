@@ -184,6 +184,17 @@ EntityID NetworkSystem::EnsureRemoteEntity(Engine::Net::UserId userId, ECS::Regi
     return GetOrCreateRemoteEntity(userId, registry);
 }
 
+EntityID NetworkSystem::TryGetPlayerEntity(Engine::Net::UserId userId) const {
+    if (userId == Engine::Net::kInvalidUserId) {
+        return INVALID_ENTITY;
+    }
+    if (userId == GetLocalUserId() && m_localPlayerEntity != INVALID_ENTITY) {
+        return m_localPlayerEntity;
+    }
+    const auto it = m_remoteEntities.find(userId);
+    return it != m_remoteEntities.end() ? it->second : INVALID_ENTITY;
+}
+
 void NetworkSystem::SetSendRateHz(float hz) {
     if (hz <= 0.0f) {
         m_sendIntervalSeconds = 0.0f;
