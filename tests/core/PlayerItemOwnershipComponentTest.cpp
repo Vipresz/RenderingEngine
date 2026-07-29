@@ -55,6 +55,20 @@ TEST(PlayerItemOwnershipComponentTest, GrantItemRollsBackWhenBagIsFull) {
     EXPECT_EQ(ownership.ownedItems.size(), kDefaultBagCapacity);
 }
 
+TEST(PlayerItemOwnershipComponentTest, RemoveFromSlotSupportsUseAndDrop) {
+    PlayerItemOwnershipComponent ownership;
+    ASSERT_TRUE(ownership.GrantItem("maple", 10, 0, 20, kDefaultBagCapacity));
+    EXPECT_EQ(ownership.ownedItems.size(), 1u);
+    EXPECT_EQ(ownership.ownedItems[0].slotIndex, 0u);
+
+    EXPECT_TRUE(ownership.RemoveFromSlot(0, 1, false));
+    EXPECT_EQ(ownership.CountItem("maple"), 9u);
+
+    EXPECT_TRUE(ownership.RemoveFromSlot(0, 0, true));
+    EXPECT_EQ(ownership.CountItem("maple"), 0u);
+    EXPECT_TRUE(ownership.ownedItems.empty());
+}
+
 TEST(PlayerItemOwnershipComponentTest, TransferItemToRollsBackOnRecipientFailure) {
     PlayerItemOwnershipComponent giver;
     PlayerItemOwnershipComponent receiver;
@@ -66,12 +80,12 @@ TEST(PlayerItemOwnershipComponentTest, TransferItemToRollsBackOnRecipientFailure
         ASSERT_TRUE(receiver.GrantItem("filler", 1, 0, 1, kDefaultBagCapacity));
     }
 
-    const std::vector<Engine::ECS::OwnedItemStack> giverBefore = giver.ownedItems;
-    const std::vector<Engine::ECS::OwnedItemStack> receiverBefore = receiver.ownedItems;
+    const size_t giverStackCount = giver.ownedItems.size();
+    const size_t receiverStackCount = receiver.ownedItems.size();
 
     EXPECT_FALSE(giver.TransferItemTo(receiver, "wood", 4, 20, kDefaultBagCapacity));
     EXPECT_EQ(giver.CountItem("wood"), 10u);
     EXPECT_EQ(receiver.CountItem("wood"), 0u);
-    EXPECT_EQ(giver.ownedItems.size(), giverBefore.size());
-    EXPECT_EQ(receiver.ownedItems.size(), receiverBefore.size());
+    EXPECT_EQ(giver.ownedItems.size(), giverStackCount);
+    EXPECT_EQ(receiver.ownedItems.size(), receiverStackCount);
 }

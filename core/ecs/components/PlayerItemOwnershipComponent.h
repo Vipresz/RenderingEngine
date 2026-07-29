@@ -40,6 +40,7 @@ struct PlayerItemOwnershipComponent {
                    uint32_t maxStackSize = 20,
                    uint16_t bagCapacity = kDefaultBagCapacity);
     bool RemoveItem(const std::string& itemId, uint32_t quantity = 1);
+    bool RemoveFromSlot(uint16_t slotIndex, uint32_t quantity = 1, bool removeEntireStack = false);
     bool RemoveInstance(uint64_t instanceId);
 
     bool TransferItemTo(PlayerItemOwnershipComponent& recipient,

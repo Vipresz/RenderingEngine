@@ -3,6 +3,7 @@
 #include "core/ecs/Registry.h"
 #include "core/network/CharacterMovementSimulator.h"
 #include "core/network/LoadoutReplication.h"
+#include "core/network/InventoryAction.h"
 #include "core/network/ItemOwnershipReplication.h"
 #include "core/network/ChatMessage.h"
 #include "core/network/MovementCommand.h"
@@ -51,6 +52,11 @@ public:
     void SetItemStackCapResolver(ItemStackCapResolver resolver) {
         m_stackCapResolver = std::move(resolver);
     }
+    using InventoryActionValidator =
+        std::function<bool(Engine::Net::InventoryActionType action, const std::string& itemId)>;
+    void SetInventoryActionValidator(InventoryActionValidator validator) {
+        m_inventoryActionValidator = std::move(validator);
+    }
     void SetBagCapacity(uint16_t capacity) { m_bagCapacity = capacity; }
 
     // Thread-safe: enqueue only.
@@ -72,6 +78,10 @@ public:
                         uint32_t quantity = 1,
                         uint64_t instanceId = 0);
     bool RemoveOwnedItem(Engine::Net::UserId userId, const std::string& itemId, uint32_t quantity = 1);
+    bool RemoveOwnedItemFromSlot(Engine::Net::UserId userId,
+                                 uint16_t slotIndex,
+                                 uint32_t quantity = 1,
+                                 bool removeEntireStack = false);
     bool RemoveOwnedItemInstance(Engine::Net::UserId userId, uint64_t instanceId);
     uint32_t CountOwnedItem(Engine::Net::UserId userId, const std::string& itemId) const;
     bool HasOwnedItem(Engine::Net::UserId userId, const std::string& itemId, uint32_t quantity = 1) const;
@@ -126,6 +136,11 @@ private:
         Engine::Net::ReplicatedItemOwnership ownership;
     };
 
+    struct PendingInventoryAction {
+        Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
+        Engine::Net::InventoryActionCommand command;
+    };
+
     struct PendingTradeCommand {
         Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
         Engine::Net::TradeCommand command;
@@ -144,6 +159,7 @@ private:
     void ApplyLoadout(Engine::Net::UserId userId, Engine::Net::ReplicatedLoadout loadout);
     void ApplyOwnership(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
     void ApplyClientBagLayout(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
+    void ApplyInventoryAction(Engine::Net::UserId userId, Engine::Net::InventoryActionCommand command);
     void RegisterLoadoutBinding();
     void RegisterOwnershipBinding();
     void RegisterTradeBinding();
@@ -176,6 +192,7 @@ private:
                                   const Engine::Net::ReplicatedItemOwnership& proposed) const;
 
     ItemStackCapResolver m_stackCapResolver;
+    InventoryActionValidator m_inventoryActionValidator;
     uint16_t m_bagCapacity = Engine::ECS::kDefaultBagCapacity;
     Engine::Net::TransformStatePayload BuildTransformPayload(Engine::Net::UserId userId,
                                                              const PlayerState& player,
@@ -208,6 +225,7 @@ private:
     std::deque<PendingCommand> m_pendingCommands;
     std::deque<PendingLoadout> m_pendingLoadouts;
     std::deque<PendingOwnership> m_pendingOwnership;
+    std::deque<PendingInventoryAction> m_pendingInventoryActions;
     std::deque<PendingTradeCommand> m_pendingTradeCommands;
     std::deque<PendingChatCommand> m_pendingChatCommands;
     std::unordered_map<Engine::Net::UserId, double> m_lastChatSendSeconds;

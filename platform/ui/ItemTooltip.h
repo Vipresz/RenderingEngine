@@ -32,6 +32,44 @@ struct ItemTooltipStyle {
     unsigned char borderAlpha = 200;
 };
 
+struct ItemActionPanelStyle : ItemTooltipStyle {
+    float actionSectionGap = 8.0f;
+    float buttonPaddingX = 10.0f;
+    float buttonPaddingY = 5.0f;
+    float buttonGap = 4.0f;
+};
+
+struct ItemActionUiRect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};
+
+struct ItemActionPanelLayout {
+    ItemActionUiRect panelBounds;
+    ItemActionUiRect useButtonBounds;
+    ItemActionUiRect dropButtonBounds;
+    bool hasUseButton = false;
+};
+
+ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
+                                            int screenWidth,
+                                            int screenHeight,
+                                            const ItemTooltipContent& content,
+                                            bool showUseButton,
+                                            const struct nk_user_font* font,
+                                            const ItemActionPanelStyle& style = {});
+
+void DrawItemActionPanel(struct nk_command_buffer* canvas,
+                         const ItemActionPanelLayout& layout,
+                         const ItemTooltipContent& content,
+                         bool showUseButton,
+                         const struct nk_user_font* font,
+                         bool hoverUseButton,
+                         bool hoverDropButton,
+                         const ItemActionPanelStyle& style = {});
+
 // Measure and draw a multi-line item inspect panel (name, type, description).
 struct nk_rect MeasureItemTooltip(const ItemTooltipContent& content,
                                   const struct nk_user_font* font,
@@ -41,7 +79,8 @@ void DrawItemTooltip(struct nk_command_buffer* canvas,
                      const struct nk_rect& bounds,
                      const ItemTooltipContent& content,
                      const struct nk_user_font* font,
-                     const ItemTooltipStyle& style = {});
+                     const ItemTooltipStyle& style = {},
+                     bool drawFrame = true);
 
 // Position near anchor (prefer above), clamp to screen, then draw.
 void PresentItemTooltip(struct nk_context* ctx,

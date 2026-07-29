@@ -164,6 +164,10 @@ struct nk_rect ClampTooltipPosition(struct nk_rect bounds,
     return bounds;
 }
 
+struct nk_rect ToNkRect(const ItemActionUiRect& rect) {
+    return nk_rect(rect.x, rect.y, rect.w, rect.h);
+}
+
 } // namespace
 
 struct nk_rect MeasureItemTooltip(const ItemTooltipContent& content,
@@ -177,7 +181,8 @@ void DrawItemTooltip(struct nk_command_buffer* canvas,
                      const struct nk_rect& bounds,
                      const ItemTooltipContent& content,
                      const struct nk_user_font* font,
-                     const ItemTooltipStyle& style) {
+                     const ItemTooltipStyle& style,
+                     bool drawFrame) {
     if (!canvas || !font || bounds.w <= 0.0f || bounds.h <= 0.0f) {
         return;
     }
@@ -194,8 +199,10 @@ void DrawItemTooltip(struct nk_command_buffer* canvas,
     const struct nk_color descriptionColor = nk_rgba(200, 210, 225, 255);
     const struct nk_color transparent = nk_rgba(0, 0, 0, 0);
 
-    nk_fill_rect(canvas, bounds, style.cornerRadius, background);
-    nk_stroke_rect(canvas, bounds, style.cornerRadius, 1.0f, border);
+    if (drawFrame) {
+        nk_fill_rect(canvas, bounds, style.cornerRadius, background);
+        nk_stroke_rect(canvas, bounds, style.cornerRadius, 1.0f, border);
+    }
 
     float textY = bounds.y + style.padding;
     const float lineHeight = font->height + style.lineGap;
@@ -273,6 +280,153 @@ void PresentItemTooltip(struct nk_context* ctx,
     struct nk_rect bounds = nk_rect(tooltipX, tooltipY, layout.width, layout.height);
     bounds = ClampTooltipPosition(bounds, screenWidth, screenHeight, style.screenMargin);
     DrawItemTooltip(canvas, bounds, content, font, style);
+}
+
+ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
+                                            int screenWidth,
+                                            int screenHeight,
+                                            const ItemTooltipContent& content,
+                                            bool showUseButton,
+                                            const struct nk_user_font* font,
+                                            const ItemActionPanelStyle& style) {
+    ItemActionPanelLayout panelLayout;
+    if (!font || screenWidth <= 0 || screenHeight <= 0 || content.name.empty()) {
+        return panelLayout;
+    }
+
+    const TooltipLayout tooltipLayout = BuildTooltipLayout(content, font, style);
+    if (tooltipLayout.width <= 0.0f || tooltipLayout.height <= 0.0f) {
+        return panelLayout;
+    }
+
+    constexpr const char* kUseLabel = "Use";
+    constexpr const char* kDropLabel = "Drop";
+    const float buttonHeight = font->height + style.buttonPaddingY * 2.0f;
+    const float useLabelWidth =
+        TextLineWidth(font, kUseLabel) + style.buttonPaddingX * 2.0f;
+    const float dropLabelWidth =
+        TextLineWidth(font, kDropLabel) + style.buttonPaddingX * 2.0f;
+    const float buttonAreaWidth = std::max(useLabelWidth, dropLabelWidth);
+
+    const float panelWidth = std::max(tooltipLayout.width, buttonAreaWidth + style.padding * 2.0f);
+    float panelHeight = tooltipLayout.height + style.actionSectionGap;
+    if (showUseButton) {
+        panelHeight += buttonHeight + style.buttonGap;
+    }
+    panelHeight += buttonHeight;
+
+    constexpr float kAnchorGap = 6.0f;
+    float panelX = anchor.x + anchor.w * 0.5f - panelWidth * 0.5f;
+    float panelY = anchor.y - panelHeight - kAnchorGap;
+    if (panelY < style.screenMargin) {
+        panelY = anchor.y + anchor.h + kAnchorGap;
+    }
+
+    const struct nk_rect clampedPanelBounds =
+        ClampTooltipPosition(nk_rect(panelX, panelY, panelWidth, panelHeight),
+                             screenWidth,
+                             screenHeight,
+                             style.screenMargin);
+    panelLayout.panelBounds.x = clampedPanelBounds.x;
+    panelLayout.panelBounds.y = clampedPanelBounds.y;
+    panelLayout.panelBounds.w = clampedPanelBounds.w;
+    panelLayout.panelBounds.h = clampedPanelBounds.h;
+    panelLayout.hasUseButton = showUseButton;
+
+    const float buttonX = panelLayout.panelBounds.x + style.padding;
+    const float buttonW = panelLayout.panelBounds.w - style.padding * 2.0f;
+    float buttonY =
+        panelLayout.panelBounds.y + tooltipLayout.height + style.actionSectionGap;
+
+    if (showUseButton) {
+        panelLayout.useButtonBounds.x = buttonX;
+        panelLayout.useButtonBounds.y = buttonY;
+        panelLayout.useButtonBounds.w = buttonW;
+        panelLayout.useButtonBounds.h = buttonHeight;
+        buttonY += buttonHeight + style.buttonGap;
+    }
+    panelLayout.dropButtonBounds.x = buttonX;
+    panelLayout.dropButtonBounds.y = buttonY;
+    panelLayout.dropButtonBounds.w = buttonW;
+    panelLayout.dropButtonBounds.h = buttonHeight;
+    return panelLayout;
+}
+
+void DrawItemActionPanel(struct nk_command_buffer* canvas,
+                         const ItemActionPanelLayout& panelLayout,
+                         const ItemTooltipContent& content,
+                         bool showUseButton,
+                         const struct nk_user_font* font,
+                         bool hoverUseButton,
+                         bool hoverDropButton,
+                         const ItemActionPanelStyle& style) {
+    if (!canvas || !font || panelLayout.panelBounds.w <= 0.0f || panelLayout.panelBounds.h <= 0.0f ||
+        content.name.empty()) {
+        return;
+    }
+
+    const TooltipLayout tooltipLayout = BuildTooltipLayout(content, font, style);
+    if (tooltipLayout.width <= 0.0f || tooltipLayout.height <= 0.0f) {
+        return;
+    }
+
+    const struct nk_color background = nk_rgba(16, 20, 32, style.backgroundAlpha);
+    const struct nk_color border = nk_rgba(120, 140, 180, style.borderAlpha);
+    const struct nk_color buttonFill = nk_rgba(34, 42, 58, 230);
+    const struct nk_color buttonHoverFill = nk_rgba(52, 66, 92, 240);
+    const struct nk_color buttonText = nk_rgba(225, 232, 245, 255);
+    const struct nk_color transparent = nk_rgba(0, 0, 0, 0);
+    constexpr const char* kUseLabel = "Use";
+    constexpr const char* kDropLabel = "Drop";
+
+    const struct nk_rect panelBounds = ToNkRect(panelLayout.panelBounds);
+    nk_fill_rect(canvas, panelBounds, style.cornerRadius, background);
+    nk_stroke_rect(canvas, panelBounds, style.cornerRadius, 1.0f, border);
+
+    const struct nk_rect tooltipBounds =
+        nk_rect(panelLayout.panelBounds.x,
+                panelLayout.panelBounds.y,
+                panelLayout.panelBounds.w,
+                tooltipLayout.height);
+    DrawItemTooltip(canvas, tooltipBounds, content, font, style, false);
+
+    if (showUseButton && panelLayout.hasUseButton) {
+        const struct nk_rect useButtonBounds = ToNkRect(panelLayout.useButtonBounds);
+        nk_fill_rect(canvas,
+                     useButtonBounds,
+                     style.cornerRadius * 0.75f,
+                     hoverUseButton ? buttonHoverFill : buttonFill);
+        nk_stroke_rect(canvas,
+                       useButtonBounds,
+                       style.cornerRadius * 0.75f,
+                       1.0f,
+                       border);
+        nk_draw_text(canvas,
+                     useButtonBounds,
+                     kUseLabel,
+                     3,
+                     font,
+                     transparent,
+                     buttonText);
+    }
+
+    const struct nk_rect dropButtonBounds = ToNkRect(panelLayout.dropButtonBounds);
+    nk_fill_rect(canvas,
+                 dropButtonBounds,
+                 style.cornerRadius * 0.75f,
+                 hoverDropButton ? buttonHoverFill : buttonFill);
+    nk_stroke_rect(canvas,
+                   dropButtonBounds,
+                   style.cornerRadius * 0.75f,
+                   1.0f,
+                   border);
+    nk_draw_text(canvas,
+                 dropButtonBounds,
+                 kDropLabel,
+                 4,
+                 font,
+                 transparent,
+                 buttonText);
 }
 
 } // namespace UI

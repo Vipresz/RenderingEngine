@@ -4,6 +4,7 @@
 #include "core/ecs/components/PlayerItemOwnershipComponent.h"
 #include "core/network/CharacterMovementSimulator.h"
 #include "core/network/ChatMessage.h"
+#include "core/network/InventoryAction.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/TransformComponent.h"
 
@@ -183,6 +184,16 @@ bool AuthoritativeGameSimulator::HandleGenericData(Engine::Net::UserId userId,
         return true;
     }
 
+    if (payload.channel == Engine::Net::kInventoryActionChannel) {
+        Engine::Net::InventoryActionCommand command;
+        if (!Engine::Net::DeserializeInventoryAction(Engine::Net::NetBuffer(payload.data), command)) {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingInventoryActions.push_back(PendingInventoryAction{userId, command});
+        return true;
+    }
+
     return false;
 }
 
@@ -203,6 +214,7 @@ void AuthoritativeGameSimulator::DrainQueues() {
     std::deque<PendingTradeCommand> tradeCommands;
     std::deque<PendingChatCommand> chatCommands;
     std::deque<PendingOwnership> ownershipUpdates;
+    std::deque<PendingInventoryAction> inventoryActions;
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         logins.swap(m_pendingLogins);
@@ -212,6 +224,7 @@ void AuthoritativeGameSimulator::DrainQueues() {
         tradeCommands.swap(m_pendingTradeCommands);
         chatCommands.swap(m_pendingChatCommands);
         ownershipUpdates.swap(m_pendingOwnership);
+        inventoryActions.swap(m_pendingInventoryActions);
     }
 
     for (const PendingLogin& login : logins) {
@@ -240,6 +253,9 @@ void AuthoritativeGameSimulator::DrainQueues() {
     }
     for (PendingOwnership& entry : ownershipUpdates) {
         ApplyClientBagLayout(entry.userId, std::move(entry.ownership));
+    }
+    for (PendingInventoryAction& entry : inventoryActions) {
+        ApplyInventoryAction(entry.userId, entry.command);
     }
 
     std::vector<Engine::Net::TransformStatePayload> peerEnqueuePayloads;
@@ -405,6 +421,56 @@ void AuthoritativeGameSimulator::ApplyClientBagLayout(Engine::Net::UserId userId
         return;
     }
     it->second.ownership = std::move(ownership);
+    it->second.snapshotDirty = true;
+    FlushDirtySnapshotForUser(userId);
+}
+
+void AuthoritativeGameSimulator::ApplyInventoryAction(Engine::Net::UserId userId,
+                                                      Engine::Net::InventoryActionCommand command) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return;
+    }
+    if (command.slotIndex >= m_bagCapacity) {
+        return;
+    }
+
+    ECS::PlayerItemOwnershipComponent component =
+        Engine::Net::ToOwnershipComponent(it->second.ownership);
+
+    const auto stackIt = std::find_if(
+        component.ownedItems.begin(),
+        component.ownedItems.end(),
+        [&](const ECS::OwnedItemStack& stack) {
+            return stack.slotIndex == command.slotIndex;
+        });
+    if (stackIt == component.ownedItems.end()) {
+        return;
+    }
+
+    if (m_inventoryActionValidator &&
+        !m_inventoryActionValidator(command.action, stackIt->itemId)) {
+        LOG_WARNING_FMT(
+            "AuthoritativeGameSimulator",
+            "Rejected inventory action %u on slot %u for user %u",
+            static_cast<unsigned>(command.action),
+            command.slotIndex,
+            userId);
+        return;
+    }
+
+    bool success = false;
+    if (command.action == Engine::Net::InventoryActionType::Use) {
+        success = component.RemoveFromSlot(command.slotIndex, 1, false);
+    } else if (command.action == Engine::Net::InventoryActionType::Drop) {
+        success = component.RemoveFromSlot(command.slotIndex, 0, true);
+    }
+
+    if (!success) {
+        return;
+    }
+
+    it->second.ownership = Engine::Net::FromOwnershipComponent(component);
     it->second.snapshotDirty = true;
     FlushDirtySnapshotForUser(userId);
 }
