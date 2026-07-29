@@ -6,6 +6,7 @@
 #include "core/network/NetTypes.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -57,10 +58,14 @@ struct TradeSession {
 bool IsValidTradeOffer(const std::vector<TradeOfferItem>& offer);
 bool CanAffordOffer(const ECS::PlayerItemOwnershipComponent& ownership,
                     const std::vector<TradeOfferItem>& offer);
+using ItemStackCapResolver = std::function<uint32_t(const std::string& itemId)>;
+
 bool ExecuteTradeExchange(ECS::PlayerItemOwnershipComponent& leftOwnership,
                           ECS::PlayerItemOwnershipComponent& rightOwnership,
                           const std::vector<TradeOfferItem>& leftOffer,
-                          const std::vector<TradeOfferItem>& rightOffer);
+                          const std::vector<TradeOfferItem>& rightOffer,
+                          ItemStackCapResolver stackCapResolver = nullptr,
+                          uint16_t bagCapacity = ECS::kDefaultBagCapacity);
 
 ECS::PlayerTradeComponent BuildTradeView(const TradeSession& session, UserId viewerUserId);
 

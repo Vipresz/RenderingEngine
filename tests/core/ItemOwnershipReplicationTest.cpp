@@ -7,8 +7,17 @@ using Engine::Net::ReplicatedItemOwnership;
 TEST(ItemOwnershipReplicationTest, RoundTripOwnedStacks) {
     ReplicatedItemOwnership original;
     original.ownerUserId = 42;
-    original.items.push_back({"gold_coin", 100, 0});
-    original.items.push_back({"quest_sword", 1, 9001});
+    Engine::Net::ReplicatedOwnedItem gold;
+    gold.slotIndex = 0;
+    gold.itemId = "gold_coin";
+    gold.quantity = 100;
+    Engine::Net::ReplicatedOwnedItem sword;
+    sword.slotIndex = 1;
+    sword.itemId = "quest_sword";
+    sword.quantity = 1;
+    sword.instanceId = 9001;
+    original.items.push_back(gold);
+    original.items.push_back(sword);
 
     const Engine::Net::NetBuffer buffer = original.Serialize();
     ReplicatedItemOwnership decoded;
@@ -16,8 +25,10 @@ TEST(ItemOwnershipReplicationTest, RoundTripOwnedStacks) {
     EXPECT_EQ(decoded.ownerUserId, 42u);
     ASSERT_EQ(decoded.items.size(), 2u);
     EXPECT_EQ(decoded.items[0].itemId, "gold_coin");
+    EXPECT_EQ(decoded.items[0].slotIndex, 0u);
     EXPECT_EQ(decoded.items[0].quantity, 100u);
     EXPECT_EQ(decoded.items[1].instanceId, 9001u);
+    EXPECT_EQ(decoded.items[1].slotIndex, 1u);
 }
 
 TEST(ItemOwnershipReplicationTest, ConvertsToAndFromComponent) {

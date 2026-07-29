@@ -84,6 +84,7 @@ if(DEFINED NUKLEAR_DIR)
         ui/Minimap.cpp
         ui/MenuStyle.cpp
         ui/FontLibrary.cpp
+        ui/ItemTooltip.cpp
         ui/UISystem.cpp
     )
 endif()

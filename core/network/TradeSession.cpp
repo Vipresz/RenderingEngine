@@ -19,6 +19,22 @@ bool RemoveOfferItem(ECS::PlayerItemOwnershipComponent& ownership, const TradeOf
     return ownership.RemoveItem(offer.itemId, offer.quantity);
 }
 
+uint32_t ResolveStackCap(const ItemStackCapResolver& resolver, const std::string& itemId) {
+    if (resolver) {
+        return resolver(itemId);
+    }
+    return 20;
+}
+
+bool GrantOfferItem(ECS::PlayerItemOwnershipComponent& ownership,
+                    const TradeOfferItem& offer,
+                    const ItemStackCapResolver& stackCapResolver,
+                    uint16_t bagCapacity) {
+    const uint32_t stackCap = ResolveStackCap(stackCapResolver, offer.itemId);
+    return ownership.GrantItem(
+        offer.itemId, offer.quantity, offer.instanceId, stackCap, bagCapacity);
+}
+
 } // namespace
 
 bool TradeSession::Involves(UserId userId) const {
@@ -116,7 +132,9 @@ bool CanAffordOffer(const ECS::PlayerItemOwnershipComponent& ownership,
 bool ExecuteTradeExchange(ECS::PlayerItemOwnershipComponent& leftOwnership,
                           ECS::PlayerItemOwnershipComponent& rightOwnership,
                           const std::vector<TradeOfferItem>& leftOffer,
-                          const std::vector<TradeOfferItem>& rightOffer) {
+                          const std::vector<TradeOfferItem>& rightOffer,
+                          ItemStackCapResolver stackCapResolver,
+                          uint16_t bagCapacity) {
     if (!IsValidTradeOffer(leftOffer) || !IsValidTradeOffer(rightOffer)) {
         return false;
     }
@@ -143,14 +161,14 @@ bool ExecuteTradeExchange(ECS::PlayerItemOwnershipComponent& leftOwnership,
     }
 
     for (const TradeOfferItem& item : rightOffer) {
-        if (!leftOwnership.GrantItem(item.itemId, item.quantity, item.instanceId)) {
+        if (!GrantOfferItem(leftOwnership, item, stackCapResolver, bagCapacity)) {
             leftOwnership = leftSnapshot;
             rightOwnership = rightSnapshot;
             return false;
         }
     }
     for (const TradeOfferItem& item : leftOffer) {
-        if (!rightOwnership.GrantItem(item.itemId, item.quantity, item.instanceId)) {
+        if (!GrantOfferItem(rightOwnership, item, stackCapResolver, bagCapacity)) {
             leftOwnership = leftSnapshot;
             rightOwnership = rightSnapshot;
             return false;

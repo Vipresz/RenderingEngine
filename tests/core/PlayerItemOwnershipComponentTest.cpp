@@ -3,6 +3,7 @@
 #include "core/ecs/components/PlayerItemOwnershipComponent.h"
 
 using Engine::ECS::PlayerItemOwnershipComponent;
+using Engine::ECS::kDefaultBagCapacity;
 
 TEST(PlayerItemOwnershipComponentTest, StacksMatchingItemIds) {
     PlayerItemOwnershipComponent ownership;
@@ -40,4 +41,37 @@ TEST(PlayerItemOwnershipComponentTest, RejectsInvalidGrants) {
     EXPECT_FALSE(ownership.GrantItem("", 1));
     EXPECT_FALSE(ownership.GrantItem("gem", 0));
     EXPECT_FALSE(ownership.GrantItem("gem", 2, 77));
+}
+
+TEST(PlayerItemOwnershipComponentTest, GrantItemRollsBackWhenBagIsFull) {
+    PlayerItemOwnershipComponent ownership;
+    for (uint16_t slot = 0; slot < kDefaultBagCapacity; ++slot) {
+        ASSERT_TRUE(ownership.GrantItem("filler", 1, 0, 1, kDefaultBagCapacity));
+    }
+    EXPECT_EQ(ownership.ownedItems.size(), kDefaultBagCapacity);
+
+    EXPECT_FALSE(ownership.GrantItem("ore", 5, 0, 20, kDefaultBagCapacity));
+    EXPECT_EQ(ownership.CountItem("ore"), 0u);
+    EXPECT_EQ(ownership.ownedItems.size(), kDefaultBagCapacity);
+}
+
+TEST(PlayerItemOwnershipComponentTest, TransferItemToRollsBackOnRecipientFailure) {
+    PlayerItemOwnershipComponent giver;
+    PlayerItemOwnershipComponent receiver;
+    giver.ownerUserId = 3;
+    receiver.ownerUserId = 4;
+    ASSERT_TRUE(giver.GrantItem("wood", 10));
+
+    for (uint16_t slot = 0; slot < kDefaultBagCapacity; ++slot) {
+        ASSERT_TRUE(receiver.GrantItem("filler", 1, 0, 1, kDefaultBagCapacity));
+    }
+
+    const std::vector<Engine::ECS::OwnedItemStack> giverBefore = giver.ownedItems;
+    const std::vector<Engine::ECS::OwnedItemStack> receiverBefore = receiver.ownedItems;
+
+    EXPECT_FALSE(giver.TransferItemTo(receiver, "wood", 4, 20, kDefaultBagCapacity));
+    EXPECT_EQ(giver.CountItem("wood"), 10u);
+    EXPECT_EQ(receiver.CountItem("wood"), 0u);
+    EXPECT_EQ(giver.ownedItems.size(), giverBefore.size());
+    EXPECT_EQ(receiver.ownedItems.size(), receiverBefore.size());
 }

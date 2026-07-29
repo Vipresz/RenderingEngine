@@ -18,6 +18,7 @@
 #include <glm/glm.hpp>
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,14 +47,25 @@ public:
     }
     const Engine::Net::MovementSpeedConfig& GetMovementSpeeds() const { return m_movementSpeeds; }
 
+    using ItemStackCapResolver = std::function<uint32_t(const std::string& itemId)>;
+    void SetItemStackCapResolver(ItemStackCapResolver resolver) {
+        m_stackCapResolver = std::move(resolver);
+    }
+    void SetBagCapacity(uint16_t capacity) { m_bagCapacity = capacity; }
+
     // Thread-safe: enqueue only.
-    void OnClientLoggedIn(Engine::Net::UserId userId, const std::string& displayName);
+    void OnClientLoggedIn(Engine::Net::UserId userId,
+                          const std::string& displayName,
+                          const std::vector<std::pair<std::string, uint32_t>>& starterInventory = {},
+                          const Engine::Net::ReplicatedItemOwnership* restoredOwnership = nullptr);
     void OnClientDisconnected(Engine::Net::UserId userId);
     bool HandleGenericData(Engine::Net::UserId userId, Engine::Net::GenericDataPayload& payload);
     bool HandleMovementCommand(Engine::Net::UserId userId, Engine::Net::MovementCommand& command);
 
     // Call from the server tick thread only.
     void Update(float deltaTime);
+
+    void FlushDirtySnapshotForUser(Engine::Net::UserId userId);
 
     bool GrantOwnedItem(Engine::Net::UserId userId,
                         const std::string& itemId,
@@ -94,6 +106,9 @@ private:
     struct PendingLogin {
         Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
         std::string displayName;
+        std::vector<std::pair<std::string, uint32_t>> starterInventory;
+        Engine::Net::ReplicatedItemOwnership restoredOwnership;
+        bool hasRestoredOwnership = false;
     };
 
     struct PendingCommand {
@@ -128,6 +143,7 @@ private:
     bool ApplyMovementSimulation(Engine::Net::UserId userId, Engine::Net::MovementCommand& command);
     void ApplyLoadout(Engine::Net::UserId userId, Engine::Net::ReplicatedLoadout loadout);
     void ApplyOwnership(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
+    void ApplyClientBagLayout(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
     void RegisterLoadoutBinding();
     void RegisterOwnershipBinding();
     void RegisterTradeBinding();
@@ -154,6 +170,13 @@ private:
     glm::vec3 ComputeSpawnPosition(size_t spawnIndex) const;
     void RefreshScalePolicy();
     static float ComputeP95(const std::deque<float>& samples);
+    uint32_t ResolveStackCap(const std::string& itemId) const;
+    bool ValidateBagOwnership(const Engine::Net::ReplicatedItemOwnership& ownership) const;
+    bool OwnershipMultisetMatches(const Engine::Net::ReplicatedItemOwnership& current,
+                                  const Engine::Net::ReplicatedItemOwnership& proposed) const;
+
+    ItemStackCapResolver m_stackCapResolver;
+    uint16_t m_bagCapacity = Engine::ECS::kDefaultBagCapacity;
     Engine::Net::TransformStatePayload BuildTransformPayload(Engine::Net::UserId userId,
                                                              const PlayerState& player,
                                                              uint64_t tick) const;

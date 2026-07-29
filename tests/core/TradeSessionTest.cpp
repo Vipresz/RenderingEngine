@@ -70,3 +70,33 @@ TEST(TradeSessionTest, SerializesTradeCommands) {
     ASSERT_EQ(decoded.offer.size(), 1u);
     EXPECT_EQ(decoded.offer[0].instanceId, 77u);
 }
+
+TEST(TradeSessionTest, RespectsPerItemStackCapsOnExchange) {
+    PlayerItemOwnershipComponent alice;
+    PlayerItemOwnershipComponent bob;
+    alice.ownerUserId = 1;
+    bob.ownerUserId = 2;
+    ASSERT_TRUE(alice.GrantItem("iron_sword", 1, 0, 1, Engine::ECS::kDefaultBagCapacity));
+    ASSERT_TRUE(bob.GrantItem("gold_coin", 10, 0, 20, Engine::ECS::kDefaultBagCapacity));
+
+    const std::vector<TradeOfferItem> aliceOffer = {{"iron_sword", 1, 0}};
+    const std::vector<TradeOfferItem> bobOffer = {{"gold_coin", 5, 0}};
+
+    const Engine::Net::ItemStackCapResolver stackCaps = [](const std::string& itemId) {
+        if (itemId == "iron_sword") {
+            return 1u;
+        }
+        return 20u;
+    };
+
+    ASSERT_TRUE(Engine::Net::ExecuteTradeExchange(
+        alice, bob, aliceOffer, bobOffer, stackCaps, Engine::ECS::kDefaultBagCapacity));
+
+    EXPECT_EQ(alice.CountItem("gold_coin"), 5u);
+    EXPECT_EQ(alice.CountItem("iron_sword"), 0u);
+    EXPECT_EQ(bob.CountItem("gold_coin"), 5u);
+    EXPECT_EQ(bob.CountItem("iron_sword"), 1u);
+    ASSERT_EQ(alice.ownedItems.size(), 1u);
+    EXPECT_EQ(alice.ownedItems[0].itemId, "gold_coin");
+    EXPECT_EQ(alice.ownedItems[0].quantity, 5u);
+}

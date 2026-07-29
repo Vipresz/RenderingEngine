@@ -10,7 +10,8 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
-#include <cmath>
+#include <map>
+#include <unordered_set>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -108,10 +109,22 @@ bool AuthoritativeGameSimulator::LoadHeightmap(const std::string& imagePath,
     return true;
 }
 
-void AuthoritativeGameSimulator::OnClientLoggedIn(Engine::Net::UserId userId,
-                                                  const std::string& displayName) {
+void AuthoritativeGameSimulator::OnClientLoggedIn(
+    Engine::Net::UserId userId,
+    const std::string& displayName,
+    const std::vector<std::pair<std::string, uint32_t>>& starterInventory,
+    const Engine::Net::ReplicatedItemOwnership* restoredOwnership) {
     std::lock_guard<std::mutex> lock(m_queueMutex);
-    m_pendingLogins.push_back(PendingLogin{userId, displayName});
+    PendingLogin login;
+    login.userId = userId;
+    login.displayName = displayName;
+    login.starterInventory = starterInventory;
+    if (restoredOwnership) {
+        login.restoredOwnership = *restoredOwnership;
+        login.restoredOwnership.ownerUserId = userId;
+        login.hasRestoredOwnership = true;
+    }
+    m_pendingLogins.push_back(std::move(login));
 }
 
 void AuthoritativeGameSimulator::OnClientDisconnected(Engine::Net::UserId userId) {
@@ -159,6 +172,17 @@ bool AuthoritativeGameSimulator::HandleGenericData(Engine::Net::UserId userId,
         return true;
     }
 
+    if (payload.channel == Engine::Net::kItemOwnershipChannel) {
+        Engine::Net::ReplicatedItemOwnership bag;
+        if (!Engine::Net::ReplicatedItemOwnership::Deserialize(
+                Engine::Net::NetBuffer(payload.data), bag)) {
+            return true;
+        }
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_pendingOwnership.push_back(PendingOwnership{userId, std::move(bag)});
+        return true;
+    }
+
     return false;
 }
 
@@ -178,6 +202,7 @@ void AuthoritativeGameSimulator::DrainQueues() {
     std::deque<PendingLoadout> loadouts;
     std::deque<PendingTradeCommand> tradeCommands;
     std::deque<PendingChatCommand> chatCommands;
+    std::deque<PendingOwnership> ownershipUpdates;
     {
         std::lock_guard<std::mutex> lock(m_queueMutex);
         logins.swap(m_pendingLogins);
@@ -186,10 +211,19 @@ void AuthoritativeGameSimulator::DrainQueues() {
         loadouts.swap(m_pendingLoadouts);
         tradeCommands.swap(m_pendingTradeCommands);
         chatCommands.swap(m_pendingChatCommands);
+        ownershipUpdates.swap(m_pendingOwnership);
     }
 
     for (const PendingLogin& login : logins) {
         SpawnPlayer(login.userId, login.displayName);
+        if (login.hasRestoredOwnership) {
+            ApplyOwnership(login.userId, login.restoredOwnership);
+        } else {
+            for (const std::pair<std::string, uint32_t>& grant : login.starterInventory) {
+                GrantOwnedItem(login.userId, grant.first, grant.second);
+            }
+        }
+        FlushDirtySnapshotForUser(login.userId);
     }
     for (Engine::Net::UserId userId : disconnects) {
         CancelTrade(userId);
@@ -203,6 +237,9 @@ void AuthoritativeGameSimulator::DrainQueues() {
     }
     for (PendingChatCommand& entry : chatCommands) {
         ApplyChatMessage(entry.userId, std::move(entry.command));
+    }
+    for (PendingOwnership& entry : ownershipUpdates) {
+        ApplyClientBagLayout(entry.userId, std::move(entry.ownership));
     }
 
     std::vector<Engine::Net::TransformStatePayload> peerEnqueuePayloads;
@@ -326,11 +363,108 @@ void AuthoritativeGameSimulator::ApplyOwnership(Engine::Net::UserId userId,
     if (ownership.ownerUserId != userId) {
         return;
     }
-    if (ownership.items.size() > Engine::ECS::kMaxOwnedItemStacks) {
-        ownership.items.resize(Engine::ECS::kMaxOwnedItemStacks);
+    if (!ValidateBagOwnership(ownership)) {
+        LOG_WARNING_FMT(
+            "AuthoritativeGameSimulator",
+            "Rejected invalid ownership snapshot for user %u",
+            userId);
+        return;
     }
     it->second.ownership = std::move(ownership);
     it->second.snapshotDirty = true;
+}
+
+void AuthoritativeGameSimulator::ApplyClientBagLayout(Engine::Net::UserId userId,
+                                                      Engine::Net::ReplicatedItemOwnership ownership) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return;
+    }
+    if (ownership.ownerUserId == Engine::Net::kInvalidUserId) {
+        ownership.ownerUserId = userId;
+    }
+    if (ownership.ownerUserId != userId) {
+        return;
+    }
+    if (!ValidateBagOwnership(ownership)) {
+        LOG_WARNING_FMT(
+            "AuthoritativeGameSimulator",
+            "Rejected invalid bag layout from user %u",
+            userId);
+        it->second.snapshotDirty = true;
+        FlushDirtySnapshotForUser(userId);
+        return;
+    }
+    if (!OwnershipMultisetMatches(it->second.ownership, ownership)) {
+        LOG_WARNING_FMT(
+            "AuthoritativeGameSimulator",
+            "Rejected bag mutation from user %u (item totals changed)",
+            userId);
+        it->second.snapshotDirty = true;
+        FlushDirtySnapshotForUser(userId);
+        return;
+    }
+    it->second.ownership = std::move(ownership);
+    it->second.snapshotDirty = true;
+    FlushDirtySnapshotForUser(userId);
+}
+
+uint32_t AuthoritativeGameSimulator::ResolveStackCap(const std::string& itemId) const {
+    if (m_stackCapResolver) {
+        return m_stackCapResolver(itemId);
+    }
+    return 20;
+}
+
+bool AuthoritativeGameSimulator::ValidateBagOwnership(
+    const Engine::Net::ReplicatedItemOwnership& ownership) const {
+    if (ownership.items.size() > Engine::ECS::kMaxOwnedItemStacks) {
+        return false;
+    }
+
+    std::unordered_set<uint16_t> usedSlots;
+    std::unordered_set<uint64_t> usedInstances;
+    for (const Engine::Net::ReplicatedOwnedItem& item : ownership.items) {
+        if (item.itemId.empty() || item.quantity == 0) {
+            return false;
+        }
+        if (item.slotIndex >= m_bagCapacity) {
+            return false;
+        }
+        if (!usedSlots.insert(item.slotIndex).second) {
+            return false;
+        }
+        const uint32_t stackCap = ResolveStackCap(item.itemId);
+        if (item.quantity > stackCap) {
+            return false;
+        }
+        if (item.instanceId > 0) {
+            if (item.quantity != 1) {
+                return false;
+            }
+            if (!usedInstances.insert(item.instanceId).second) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool AuthoritativeGameSimulator::OwnershipMultisetMatches(
+    const Engine::Net::ReplicatedItemOwnership& current,
+    const Engine::Net::ReplicatedItemOwnership& proposed) const {
+    using ItemKey = std::pair<std::string, uint64_t>;
+    std::map<ItemKey, uint32_t> currentCounts;
+    std::map<ItemKey, uint32_t> proposedCounts;
+
+    for (const Engine::Net::ReplicatedOwnedItem& item : current.items) {
+        currentCounts[{item.itemId, item.instanceId}] += item.quantity;
+    }
+    for (const Engine::Net::ReplicatedOwnedItem& item : proposed.items) {
+        proposedCounts[{item.itemId, item.instanceId}] += item.quantity;
+    }
+
+    return currentCounts == proposedCounts;
 }
 
 bool AuthoritativeGameSimulator::GrantOwnedItem(Engine::Net::UserId userId,
@@ -344,7 +478,8 @@ bool AuthoritativeGameSimulator::GrantOwnedItem(Engine::Net::UserId userId,
 
     ECS::PlayerItemOwnershipComponent component =
         Engine::Net::ToOwnershipComponent(it->second.ownership);
-    if (!component.GrantItem(itemId, quantity, instanceId)) {
+    const uint32_t stackCap = ResolveStackCap(itemId);
+    if (!component.GrantItem(itemId, quantity, instanceId, stackCap, m_bagCapacity)) {
         return false;
     }
     it->second.ownership = Engine::Net::FromOwnershipComponent(component);
@@ -485,6 +620,27 @@ bool AuthoritativeGameSimulator::ApplyMovementSimulation(Engine::Net::UserId use
     return true;
 }
 
+void AuthoritativeGameSimulator::FlushDirtySnapshotForUser(Engine::Net::UserId userId) {
+    auto it = m_players.find(userId);
+    if (it == m_players.end() || !it->second.snapshotDirty) {
+        return;
+    }
+
+    const Engine::Net::EntitySnapshot snapshot =
+        m_replication.BuildEntitySnapshot(userId, m_registry, m_tickNumber);
+    if (snapshot.components.empty()) {
+        it->second.snapshotDirty = false;
+        return;
+    }
+
+    Engine::Net::NetPacket packet =
+        Engine::Net::MakeMessage(Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), 0);
+    m_server.BroadcastPacketToInterested(packet, userId, it->second.movement.position);
+    m_server.SendPacketToClient(userId, packet);
+    it->second.snapshotDirty = false;
+    ++m_tickDirtySnapshotsSent;
+}
+
 void AuthoritativeGameSimulator::Update(float deltaTime) {
     const auto tickStart = std::chrono::steady_clock::now();
     m_tickMovementCommandsProcessed = 0;
@@ -514,6 +670,7 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
                 Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), 0);
             m_server.BroadcastPacketToInterested(
                 packet, entry.first, entry.second.movement.position);
+            m_server.SendPacketToClient(entry.first, packet);
             entry.second.snapshotDirty = false;
             ++m_tickDirtySnapshotsSent;
         }
@@ -931,7 +1088,9 @@ bool AuthoritativeGameSimulator::TryExecuteTrade(Engine::Net::TradeSession& sess
     if (!Engine::Net::ExecuteTradeExchange(initiatorOwnership,
                                            partnerOwnership,
                                            session.initiatorOffer,
-                                           session.partnerOffer)) {
+                                           session.partnerOffer,
+                                           m_stackCapResolver,
+                                           m_bagCapacity)) {
         return false;
     }
 

@@ -9,6 +9,7 @@ ECS::PlayerItemOwnershipComponent ToOwnershipComponent(const ReplicatedItemOwner
     component.ownedItems.reserve(replicated.items.size());
     for (const ReplicatedOwnedItem& item : replicated.items) {
         ECS::OwnedItemStack stack;
+        stack.slotIndex = item.slotIndex;
         stack.itemId = item.itemId;
         stack.quantity = item.quantity;
         stack.instanceId = item.instanceId;
@@ -23,6 +24,7 @@ ReplicatedItemOwnership FromOwnershipComponent(const ECS::PlayerItemOwnershipCom
     replicated.items.reserve(component.ownedItems.size());
     for (const ECS::OwnedItemStack& stack : component.ownedItems) {
         ReplicatedOwnedItem item;
+        item.slotIndex = stack.slotIndex;
         item.itemId = stack.itemId;
         item.quantity = stack.quantity;
         item.instanceId = stack.instanceId;
