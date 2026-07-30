@@ -49,8 +49,12 @@ struct ItemActionUiRect {
 struct ItemActionPanelLayout {
     ItemActionUiRect panelBounds;
     ItemActionUiRect useButtonBounds;
+    ItemActionUiRect tradeButtonBounds;
+    ItemActionUiRect tradeXButtonBounds;
     ItemActionUiRect dropButtonBounds;
     bool hasUseButton = false;
+    bool hasTradeButton = false;
+    bool hasTradeXButton = false;
 };
 
 ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
@@ -58,6 +62,8 @@ ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
                                             int screenHeight,
                                             const ItemTooltipContent& content,
                                             bool showUseButton,
+                                            bool showTradeButton,
+                                            bool showTradeXButton,
                                             const struct nk_user_font* font,
                                             const ItemActionPanelStyle& style = {});
 
@@ -65,8 +71,12 @@ void DrawItemActionPanel(struct nk_command_buffer* canvas,
                          const ItemActionPanelLayout& layout,
                          const ItemTooltipContent& content,
                          bool showUseButton,
+                         bool showTradeButton,
+                         bool showTradeXButton,
                          const struct nk_user_font* font,
                          bool hoverUseButton,
+                         bool hoverTradeButton,
+                         bool hoverTradeXButton,
                          bool hoverDropButton,
                          const ItemActionPanelStyle& style = {});
 

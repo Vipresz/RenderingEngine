@@ -5,6 +5,7 @@
 #include "Logger.h"
 
 #include <GLFW/glfw3.h>
+#include <algorithm>
 
 #define NK_INCLUDE_FIXED_TYPES
 #define NK_INCLUDE_STANDARD_IO
@@ -75,22 +76,47 @@ void UISystem::PresentFrame() {
 
     m_nuklear->BeginFrame();
 
-    if (m_builder) {
-        // Nuklear's GLFW backend lays out in window (logical) pixels and scales to the
-        // framebuffer via fb_scale. Using framebuffer size here causes blur on Windows DPI.
-        int screenW = 0;
-        int screenH = 0;
-        if (m_window && m_window->GetGLFWWindow()) {
-            glfwGetWindowSize(m_window->GetGLFWWindow(), &screenW, &screenH);
-        }
-        if (screenW <= 0 || screenH <= 0) {
-            screenW = m_window ? m_window->getBufferWidth() : 0;
-            screenH = m_window ? m_window->getBufferHeight() : 0;
-        }
+    int screenW = 0;
+    int screenH = 0;
+    if (m_window && m_window->GetGLFWWindow()) {
+        glfwGetWindowSize(m_window->GetGLFWWindow(), &screenW, &screenH);
+    }
+    if (screenW <= 0 || screenH <= 0) {
+        screenW = m_window ? m_window->getBufferWidth() : 0;
+        screenH = m_window ? m_window->getBufferHeight() : 0;
+    }
+
+    if (!m_layers.empty()) {
+        InvokeLayers(m_nuklear->GetContext(), screenW, screenH);
+    } else if (m_builder) {
         m_builder(m_nuklear->GetContext(), m_style, screenW, screenH);
     }
 
     m_nuklear->EndFrame();
+}
+
+void UISystem::InvokeLayers(struct nk_context* ctx, int screenWidth, int screenHeight) {
+    if (!ctx || m_layers.empty()) {
+        return;
+    }
+
+    std::vector<RegisteredUILayer> sortedLayers = m_layers;
+    std::stable_sort(sortedLayers.begin(),
+                     sortedLayers.end(),
+                     [](const RegisteredUILayer& left, const RegisteredUILayer& right) {
+                         const int16_t leftPriority = UILayerPriority(left.layer);
+                         const int16_t rightPriority = UILayerPriority(right.layer);
+                         if (leftPriority != rightPriority) {
+                             return leftPriority < rightPriority;
+                         }
+                         return left.registrationOrder < right.registrationOrder;
+                     });
+
+    for (const RegisteredUILayer& entry : sortedLayers) {
+        if (entry.callback) {
+            entry.callback(ctx, m_style, screenWidth, screenHeight);
+        }
+    }
 }
 
 void UISystem::Update(float /*deltaTime*/, ECS::Registry& /*registry*/, uint64_t /*tickNumber*/) {
@@ -102,7 +128,26 @@ void UISystem::Shutdown(ECS::Registry& /*registry*/) {
 }
 
 void UISystem::SetUIBuilder(UIBuilder builder) {
+    ClearLayers();
     m_builder = std::move(builder);
+}
+
+void UISystem::RegisterLayer(UILayerId layer, UIBuilder callback, const char* debugName) {
+    if (!callback) {
+        return;
+    }
+
+    RegisteredUILayer entry;
+    entry.layer = layer;
+    entry.callback = std::move(callback);
+    entry.debugName = debugName;
+    entry.registrationOrder = m_nextLayerRegistrationOrder++;
+    m_layers.push_back(std::move(entry));
+}
+
+void UISystem::ClearLayers() {
+    m_layers.clear();
+    m_nextLayerRegistrationOrder = 0;
 }
 
 void UISystem::SetStyle(const MenuStyle& style) {

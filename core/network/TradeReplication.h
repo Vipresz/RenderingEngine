@@ -16,11 +16,13 @@ struct ReplicatedTradeOfferItem {
     std::string itemId;
     uint32_t quantity = 1;
     uint64_t instanceId = 0;
+    uint16_t bagSlotIndex = ECS::kInvalidBagSlotIndex;
 };
 
 struct ReplicatedPlayerTrade {
     uint64_t sessionId = 0;
     UserId partnerUserId = kInvalidUserId;
+    UserId requesterUserId = kInvalidUserId;
     uint8_t phase = static_cast<uint8_t>(ECS::TradePhase::None);
     bool selfLocked = false;
     bool partnerLocked = false;
@@ -41,6 +43,7 @@ struct ReplicatedPlayerTrade {
             buffer.WriteString(item.itemId);
             buffer.WriteU32(item.quantity);
             buffer.WriteU64(item.instanceId);
+            buffer.WriteU16(item.bagSlotIndex);
         }
 
         const uint16_t partnerCount = static_cast<uint16_t>(partnerOffer.size());
@@ -49,7 +52,9 @@ struct ReplicatedPlayerTrade {
             buffer.WriteString(item.itemId);
             buffer.WriteU32(item.quantity);
             buffer.WriteU64(item.instanceId);
+            buffer.WriteU16(item.bagSlotIndex);
         }
+        buffer.WriteU32(requesterUserId);
         return buffer;
     }
 
@@ -66,6 +71,10 @@ struct ReplicatedPlayerTrade {
         }
         out.selfLocked = selfLocked != 0;
         out.partnerLocked = partnerLocked != 0;
+        out.requesterUserId = kInvalidUserId;
+        if (selfCount > kMaxTradeOfferSlots) {
+            return false;
+        }
         out.selfOffer.clear();
         out.selfOffer.reserve(selfCount);
         for (uint16_t i = 0; i < selfCount; ++i) {
@@ -74,9 +83,19 @@ struct ReplicatedPlayerTrade {
                 !copy.ReadU64(item.instanceId)) {
                 return false;
             }
+            if (copy.Remaining() >= sizeof(uint16_t)) {
+                if (!copy.ReadU16(item.bagSlotIndex)) {
+                    return false;
+                }
+            } else {
+                item.bagSlotIndex = ECS::kInvalidBagSlotIndex;
+            }
             out.selfOffer.push_back(std::move(item));
         }
         if (!copy.ReadU16(partnerCount)) {
+            return false;
+        }
+        if (partnerCount > kMaxTradeOfferSlots) {
             return false;
         }
         out.partnerOffer.clear();
@@ -87,7 +106,17 @@ struct ReplicatedPlayerTrade {
                 !copy.ReadU64(item.instanceId)) {
                 return false;
             }
+            if (copy.Remaining() >= sizeof(uint16_t)) {
+                if (!copy.ReadU16(item.bagSlotIndex)) {
+                    return false;
+                }
+            } else {
+                item.bagSlotIndex = ECS::kInvalidBagSlotIndex;
+            }
             out.partnerOffer.push_back(std::move(item));
+        }
+        if (copy.Remaining() >= sizeof(uint32_t)) {
+            copy.ReadU32(out.requesterUserId);
         }
         return true;
     }

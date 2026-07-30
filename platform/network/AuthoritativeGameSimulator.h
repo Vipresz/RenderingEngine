@@ -58,6 +58,8 @@ public:
         m_inventoryActionValidator = std::move(validator);
     }
     void SetBagCapacity(uint16_t capacity) { m_bagCapacity = capacity; }
+    void SetTradeMaxDistance(float maxDistance) { m_tradeMaxDistance = maxDistance; }
+    float GetTradeMaxDistance() const { return m_tradeMaxDistance; }
 
     // Thread-safe: enqueue only.
     void OnClientLoggedIn(Engine::Net::UserId userId,
@@ -166,12 +168,14 @@ private:
     void ApplyTradeCommand(Engine::Net::UserId userId, Engine::Net::TradeCommand command);
     void ApplyChatMessage(Engine::Net::UserId userId, Engine::Net::ChatCommand command);
     void SyncTradeStateForSession(const Engine::Net::TradeSession& session);
-    void EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase);
+    bool EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase);
     Engine::Net::TradeSession* FindTradeSessionFor(Engine::Net::UserId userId);
     const Engine::Net::TradeSession* FindTradeSessionFor(Engine::Net::UserId userId) const;
     bool TryExecuteTrade(Engine::Net::TradeSession& session);
     void MarkTradeParticipantsDirty(const Engine::Net::TradeSession& session);
     bool PlayerAvailableForTrade(Engine::Net::UserId userId) const;
+    bool ArePlayersWithinTradeRange(Engine::Net::UserId firstUserId,
+                                    Engine::Net::UserId secondUserId) const;
     void BroadcastAuthoritativeTransform(Engine::Net::UserId userId,
                                          const PlayerState& player,
                                          uint64_t tick);
@@ -234,6 +238,7 @@ private:
     uint64_t m_nextTradeSessionId = 1;
     std::deque<Engine::Net::UserId> m_deferredVisibilityUpdates;
     std::unordered_set<Engine::Net::UserId> m_deferredVisibilityPending;
+    float m_tradeMaxDistance = 8.0f;
 };
 
 } // namespace Networking

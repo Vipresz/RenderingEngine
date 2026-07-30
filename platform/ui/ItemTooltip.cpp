@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstring>
 
 namespace Engine {
 namespace Platform {
@@ -287,6 +288,8 @@ ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
                                             int screenHeight,
                                             const ItemTooltipContent& content,
                                             bool showUseButton,
+                                            bool showTradeButton,
+                                            bool showTradeXButton,
                                             const struct nk_user_font* font,
                                             const ItemActionPanelStyle& style) {
     ItemActionPanelLayout panelLayout;
@@ -300,17 +303,37 @@ ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
     }
 
     constexpr const char* kUseLabel = "Use";
+    constexpr const char* kTradeLabel = "Trade";
+    constexpr const char* kTradeXLabel = "Trade X";
     constexpr const char* kDropLabel = "Drop";
     const float buttonHeight = font->height + style.buttonPaddingY * 2.0f;
-    const float useLabelWidth =
-        TextLineWidth(font, kUseLabel) + style.buttonPaddingX * 2.0f;
-    const float dropLabelWidth =
-        TextLineWidth(font, kDropLabel) + style.buttonPaddingX * 2.0f;
-    const float buttonAreaWidth = std::max(useLabelWidth, dropLabelWidth);
+    const auto buttonLabelWidth = [&](const char* label) {
+        return TextLineWidth(font, std::string(label)) + style.buttonPaddingX * 2.0f;
+    };
+    const float useLabelWidth = buttonLabelWidth(kUseLabel);
+    const float tradeLabelWidth = buttonLabelWidth(kTradeLabel);
+    const float tradeXLabelWidth = buttonLabelWidth(kTradeXLabel);
+    const float dropLabelWidth = buttonLabelWidth(kDropLabel);
+    float buttonAreaWidth = dropLabelWidth;
+    if (showUseButton) {
+        buttonAreaWidth = std::max(buttonAreaWidth, useLabelWidth);
+    }
+    if (showTradeButton) {
+        buttonAreaWidth = std::max(buttonAreaWidth, tradeLabelWidth);
+    }
+    if (showTradeXButton) {
+        buttonAreaWidth = std::max(buttonAreaWidth, tradeXLabelWidth);
+    }
 
     const float panelWidth = std::max(tooltipLayout.width, buttonAreaWidth + style.padding * 2.0f);
     float panelHeight = tooltipLayout.height + style.actionSectionGap;
     if (showUseButton) {
+        panelHeight += buttonHeight + style.buttonGap;
+    }
+    if (showTradeButton) {
+        panelHeight += buttonHeight + style.buttonGap;
+    }
+    if (showTradeXButton) {
         panelHeight += buttonHeight + style.buttonGap;
     }
     panelHeight += buttonHeight;
@@ -332,6 +355,8 @@ ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
     panelLayout.panelBounds.w = clampedPanelBounds.w;
     panelLayout.panelBounds.h = clampedPanelBounds.h;
     panelLayout.hasUseButton = showUseButton;
+    panelLayout.hasTradeButton = showTradeButton;
+    panelLayout.hasTradeXButton = showTradeXButton;
 
     const float buttonX = panelLayout.panelBounds.x + style.padding;
     const float buttonW = panelLayout.panelBounds.w - style.padding * 2.0f;
@@ -345,6 +370,20 @@ ItemActionPanelLayout LayoutItemActionPanel(const struct nk_rect& anchor,
         panelLayout.useButtonBounds.h = buttonHeight;
         buttonY += buttonHeight + style.buttonGap;
     }
+    if (showTradeButton) {
+        panelLayout.tradeButtonBounds.x = buttonX;
+        panelLayout.tradeButtonBounds.y = buttonY;
+        panelLayout.tradeButtonBounds.w = buttonW;
+        panelLayout.tradeButtonBounds.h = buttonHeight;
+        buttonY += buttonHeight + style.buttonGap;
+    }
+    if (showTradeXButton) {
+        panelLayout.tradeXButtonBounds.x = buttonX;
+        panelLayout.tradeXButtonBounds.y = buttonY;
+        panelLayout.tradeXButtonBounds.w = buttonW;
+        panelLayout.tradeXButtonBounds.h = buttonHeight;
+        buttonY += buttonHeight + style.buttonGap;
+    }
     panelLayout.dropButtonBounds.x = buttonX;
     panelLayout.dropButtonBounds.y = buttonY;
     panelLayout.dropButtonBounds.w = buttonW;
@@ -356,8 +395,12 @@ void DrawItemActionPanel(struct nk_command_buffer* canvas,
                          const ItemActionPanelLayout& panelLayout,
                          const ItemTooltipContent& content,
                          bool showUseButton,
+                         bool showTradeButton,
+                         bool showTradeXButton,
                          const struct nk_user_font* font,
                          bool hoverUseButton,
+                         bool hoverTradeButton,
+                         bool hoverTradeXButton,
                          bool hoverDropButton,
                          const ItemActionPanelStyle& style) {
     if (!canvas || !font || panelLayout.panelBounds.w <= 0.0f || panelLayout.panelBounds.h <= 0.0f ||
@@ -377,7 +420,36 @@ void DrawItemActionPanel(struct nk_command_buffer* canvas,
     const struct nk_color buttonText = nk_rgba(225, 232, 245, 255);
     const struct nk_color transparent = nk_rgba(0, 0, 0, 0);
     constexpr const char* kUseLabel = "Use";
+    constexpr const char* kTradeLabel = "Trade";
+    constexpr const char* kTradeXLabel = "Trade X";
     constexpr const char* kDropLabel = "Drop";
+
+    const auto drawActionButton = [&](const ItemActionUiRect& bounds,
+                                      const char* label,
+                                      bool hover) {
+        const struct nk_rect buttonBounds = ToNkRect(bounds);
+        const int labelLen = static_cast<int>(std::strlen(label));
+        const float textW = font->width(font->userdata, font->height, label, labelLen);
+        nk_fill_rect(canvas,
+                     buttonBounds,
+                     style.cornerRadius * 0.75f,
+                     hover ? buttonHoverFill : buttonFill);
+        nk_stroke_rect(canvas,
+                       buttonBounds,
+                       style.cornerRadius * 0.75f,
+                       1.0f,
+                       border);
+        nk_draw_text(canvas,
+                     nk_rect(buttonBounds.x + (buttonBounds.w - textW) * 0.5f,
+                             buttonBounds.y + (buttonBounds.h - font->height) * 0.5f,
+                             textW,
+                             font->height),
+                     label,
+                     labelLen,
+                     font,
+                     transparent,
+                     buttonText);
+    };
 
     const struct nk_rect panelBounds = ToNkRect(panelLayout.panelBounds);
     nk_fill_rect(canvas, panelBounds, style.cornerRadius, background);
@@ -391,42 +463,15 @@ void DrawItemActionPanel(struct nk_command_buffer* canvas,
     DrawItemTooltip(canvas, tooltipBounds, content, font, style, false);
 
     if (showUseButton && panelLayout.hasUseButton) {
-        const struct nk_rect useButtonBounds = ToNkRect(panelLayout.useButtonBounds);
-        nk_fill_rect(canvas,
-                     useButtonBounds,
-                     style.cornerRadius * 0.75f,
-                     hoverUseButton ? buttonHoverFill : buttonFill);
-        nk_stroke_rect(canvas,
-                       useButtonBounds,
-                       style.cornerRadius * 0.75f,
-                       1.0f,
-                       border);
-        nk_draw_text(canvas,
-                     useButtonBounds,
-                     kUseLabel,
-                     3,
-                     font,
-                     transparent,
-                     buttonText);
+        drawActionButton(panelLayout.useButtonBounds, kUseLabel, hoverUseButton);
     }
-
-    const struct nk_rect dropButtonBounds = ToNkRect(panelLayout.dropButtonBounds);
-    nk_fill_rect(canvas,
-                 dropButtonBounds,
-                 style.cornerRadius * 0.75f,
-                 hoverDropButton ? buttonHoverFill : buttonFill);
-    nk_stroke_rect(canvas,
-                   dropButtonBounds,
-                   style.cornerRadius * 0.75f,
-                   1.0f,
-                   border);
-    nk_draw_text(canvas,
-                 dropButtonBounds,
-                 kDropLabel,
-                 4,
-                 font,
-                 transparent,
-                 buttonText);
+    if (showTradeButton && panelLayout.hasTradeButton) {
+        drawActionButton(panelLayout.tradeButtonBounds, kTradeLabel, hoverTradeButton);
+    }
+    if (showTradeXButton && panelLayout.hasTradeXButton) {
+        drawActionButton(panelLayout.tradeXButtonBounds, kTradeXLabel, hoverTradeXButton);
+    }
+    drawActionButton(panelLayout.dropButtonBounds, kDropLabel, hoverDropButton);
 }
 
 } // namespace UI

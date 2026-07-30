@@ -10,6 +10,7 @@ ReplicatedTradeOfferItem ToReplicatedOffer(const ECS::TradeOfferItem& item) {
     replicated.itemId = item.itemId;
     replicated.quantity = item.quantity;
     replicated.instanceId = item.instanceId;
+    replicated.bagSlotIndex = item.bagSlotIndex;
     return replicated;
 }
 
@@ -18,6 +19,7 @@ ECS::TradeOfferItem FromReplicatedOffer(const ReplicatedTradeOfferItem& item) {
     offer.itemId = item.itemId;
     offer.quantity = item.quantity;
     offer.instanceId = item.instanceId;
+    offer.bagSlotIndex = item.bagSlotIndex;
     return offer;
 }
 
@@ -27,6 +29,7 @@ ECS::PlayerTradeComponent ToTradeComponent(const ReplicatedPlayerTrade& replicat
     ECS::PlayerTradeComponent component;
     component.sessionId = replicated.sessionId;
     component.partnerUserId = replicated.partnerUserId;
+    component.requesterUserId = replicated.requesterUserId;
     component.phase = static_cast<ECS::TradePhase>(replicated.phase);
     component.selfLocked = replicated.selfLocked;
     component.partnerLocked = replicated.partnerLocked;
@@ -49,6 +52,7 @@ ReplicatedPlayerTrade FromTradeView(const ECS::PlayerTradeComponent& view) {
     ReplicatedPlayerTrade replicated;
     replicated.sessionId = view.sessionId;
     replicated.partnerUserId = view.partnerUserId;
+    replicated.requesterUserId = view.requesterUserId;
     replicated.phase = static_cast<uint8_t>(view.phase);
     replicated.selfLocked = view.selfLocked;
     replicated.partnerLocked = view.partnerLocked;

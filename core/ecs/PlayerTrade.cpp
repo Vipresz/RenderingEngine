@@ -6,6 +6,7 @@ namespace ECS {
 void PlayerTradeComponent::Clear() {
     sessionId = 0;
     partnerUserId = Engine::Net::kInvalidUserId;
+    requesterUserId = Engine::Net::kInvalidUserId;
     phase = TradePhase::None;
     selfLocked = false;
     partnerLocked = false;

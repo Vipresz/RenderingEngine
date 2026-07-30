@@ -114,7 +114,7 @@ set(ENGINE_TEST_SOURCES
 )
 
 if(BUILD_ENGINE_PLATFORM)
-    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp network/NetServerScalePolicyMultiUserTest.cpp network/AuthoritativeGameSimulatorOwnershipTest.cpp network/AuthoritativeGameSimulatorTradeTest.cpp)
+    list(APPEND ENGINE_TEST_SOURCES render/ModelRaycastTest.cpp network/NetworkSystemTest.cpp network/NetServerJoinLoadTest.cpp network/NetServerScalePolicyMultiUserTest.cpp network/AuthoritativeGameSimulatorOwnershipTest.cpp network/AuthoritativeGameSimulatorTradeTest.cpp network/AuthoritativeGameSimulatorChannelsTest.cpp)
 endif()
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})

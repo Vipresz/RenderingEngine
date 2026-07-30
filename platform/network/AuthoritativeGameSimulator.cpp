@@ -12,6 +12,7 @@
 #include <cmath>
 #include <chrono>
 #include <map>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 #include <glm/glm.hpp>
@@ -742,6 +743,21 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
         }
     }
 
+    for (auto& entry : m_players) {
+        if (entry.second.snapshotDirty) {
+            continue;
+        }
+        Engine::Net::ReplicatedPlayerTrade& trade = entry.second.trade;
+        if (trade.sessionId == 0) {
+            continue;
+        }
+        const auto phase = static_cast<ECS::TradePhase>(trade.phase);
+        if (phase == ECS::TradePhase::Cancelled || phase == ECS::TradePhase::Completed ||
+            phase == ECS::TradePhase::None) {
+            trade = {};
+        }
+    }
+
     const size_t replicationBudget = m_server.GetScalePolicyConfig().maxPeerTransformsPerTick;
     m_tickPeerTransformsSent =
         static_cast<uint32_t>(m_server.FlushPendingPeerTransforms(replicationBudget));
@@ -1061,6 +1077,23 @@ bool AuthoritativeGameSimulator::PlayerAvailableForTrade(Engine::Net::UserId use
     return m_userTradeSession.find(userId) == m_userTradeSession.end();
 }
 
+bool AuthoritativeGameSimulator::ArePlayersWithinTradeRange(Engine::Net::UserId firstUserId,
+                                                            Engine::Net::UserId secondUserId) const {
+    if (m_tradeMaxDistance <= 0.0f) {
+        return true;
+    }
+
+    const auto firstIt = m_players.find(firstUserId);
+    const auto secondIt = m_players.find(secondUserId);
+    if (firstIt == m_players.end() || secondIt == m_players.end()) {
+        return false;
+    }
+
+    const glm::vec3 delta = firstIt->second.movement.position - secondIt->second.movement.position;
+    const float horizontalDistanceSq = delta.x * delta.x + delta.z * delta.z;
+    return horizontalDistanceSq <= m_tradeMaxDistance * m_tradeMaxDistance;
+}
+
 Engine::Net::TradeSession* AuthoritativeGameSimulator::FindTradeSessionFor(Engine::Net::UserId userId) {
     const auto mapping = m_userTradeSession.find(userId);
     if (mapping == m_userTradeSession.end()) {
@@ -1111,28 +1144,66 @@ void AuthoritativeGameSimulator::SyncTradeStateForSession(const Engine::Net::Tra
     }
 }
 
-void AuthoritativeGameSimulator::EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase) {
+bool AuthoritativeGameSimulator::EndTradeSession(uint64_t sessionId, ECS::TradePhase finalPhase) {
     const auto sessionIt = m_tradeSessions.find(sessionId);
     if (sessionIt == m_tradeSessions.end()) {
-        return;
+        return false;
     }
 
     Engine::Net::TradeSession session = sessionIt->second;
+
+    if (finalPhase == ECS::TradePhase::Cancelled) {
+        std::optional<ECS::PlayerItemOwnershipComponent> restoredInitiator;
+        std::optional<ECS::PlayerItemOwnershipComponent> restoredPartner;
+
+        if (auto initiatorIt = m_players.find(session.initiatorUserId); initiatorIt != m_players.end()) {
+            ECS::PlayerItemOwnershipComponent ownership =
+                Engine::Net::ToOwnershipComponent(initiatorIt->second.ownership);
+            if (!Engine::Net::RestoreOfferToOwnership(
+                    ownership, session.initiatorOffer, m_stackCapResolver, m_bagCapacity)) {
+                LOG_ERROR_FMT("AuthoritativeGameSimulator",
+                              "Failed to restore initiator escrow for trade session %llu",
+                              static_cast<unsigned long long>(sessionId));
+                return false;
+            }
+            restoredInitiator = std::move(ownership);
+        }
+        if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
+            ECS::PlayerItemOwnershipComponent ownership =
+                Engine::Net::ToOwnershipComponent(partnerIt->second.ownership);
+            if (!Engine::Net::RestoreOfferToOwnership(
+                    ownership, session.partnerOffer, m_stackCapResolver, m_bagCapacity)) {
+                LOG_ERROR_FMT("AuthoritativeGameSimulator",
+                              "Failed to restore partner escrow for trade session %llu",
+                              static_cast<unsigned long long>(sessionId));
+                return false;
+            }
+            restoredPartner = std::move(ownership);
+        }
+
+        if (restoredInitiator) {
+            if (auto initiatorIt = m_players.find(session.initiatorUserId);
+                initiatorIt != m_players.end()) {
+                initiatorIt->second.ownership =
+                    Engine::Net::FromOwnershipComponent(*restoredInitiator);
+                initiatorIt->second.snapshotDirty = true;
+            }
+        }
+        if (restoredPartner) {
+            if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
+                partnerIt->second.ownership = Engine::Net::FromOwnershipComponent(*restoredPartner);
+                partnerIt->second.snapshotDirty = true;
+            }
+        }
+    }
+
     session.phase = finalPhase;
     SyncTradeStateForSession(session);
 
     m_userTradeSession.erase(session.initiatorUserId);
     m_userTradeSession.erase(session.partnerUserId);
     m_tradeSessions.erase(sessionIt);
-
-    if (auto initiatorIt = m_players.find(session.initiatorUserId); initiatorIt != m_players.end()) {
-        initiatorIt->second.trade = {};
-        initiatorIt->second.snapshotDirty = true;
-    }
-    if (auto partnerIt = m_players.find(session.partnerUserId); partnerIt != m_players.end()) {
-        partnerIt->second.trade = {};
-        partnerIt->second.snapshotDirty = true;
-    }
+    return true;
 }
 
 bool AuthoritativeGameSimulator::TryExecuteTrade(Engine::Net::TradeSession& session) {
@@ -1151,12 +1222,12 @@ bool AuthoritativeGameSimulator::TryExecuteTrade(Engine::Net::TradeSession& sess
     ECS::PlayerItemOwnershipComponent partnerOwnership =
         Engine::Net::ToOwnershipComponent(partnerIt->second.ownership);
 
-    if (!Engine::Net::ExecuteTradeExchange(initiatorOwnership,
-                                           partnerOwnership,
-                                           session.initiatorOffer,
-                                           session.partnerOffer,
-                                           m_stackCapResolver,
-                                           m_bagCapacity)) {
+    if (!Engine::Net::ExecuteEscrowedTradeExchange(initiatorOwnership,
+                                                  partnerOwnership,
+                                                  session.initiatorOffer,
+                                                  session.partnerOffer,
+                                                  m_stackCapResolver,
+                                                  m_bagCapacity)) {
         return false;
     }
 
@@ -1178,6 +1249,9 @@ bool AuthoritativeGameSimulator::RequestTrade(Engine::Net::UserId fromUserId,
         return false;
     }
     if (!PlayerAvailableForTrade(fromUserId) || !PlayerAvailableForTrade(toUserId)) {
+        return false;
+    }
+    if (!ArePlayersWithinTradeRange(fromUserId, toUserId)) {
         return false;
     }
 
@@ -1204,8 +1278,11 @@ bool AuthoritativeGameSimulator::RespondToTrade(Engine::Net::UserId responderUse
     }
 
     if (!accept) {
-        EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
-        return true;
+        return EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
+    }
+
+    if (!ArePlayersWithinTradeRange(responderUserId, requesterUserId)) {
+        return false;
     }
 
     session->phase = ECS::TradePhase::Open;
@@ -1218,8 +1295,7 @@ bool AuthoritativeGameSimulator::CancelTrade(Engine::Net::UserId userId) {
     if (session == nullptr) {
         return false;
     }
-    EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
-    return true;
+    return EndTradeSession(session->sessionId, ECS::TradePhase::Cancelled);
 }
 
 bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
@@ -1236,17 +1312,23 @@ bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
     if (playerIt == m_players.end()) {
         return false;
     }
-    const ECS::PlayerItemOwnershipComponent ownership =
-        Engine::Net::ToOwnershipComponent(playerIt->second.ownership);
-    if (!Engine::Net::CanAffordOffer(ownership, offer)) {
-        return false;
-    }
 
     std::vector<Engine::Net::TradeOfferItem>* userOffer = session->OfferFor(userId);
     if (userOffer == nullptr) {
         return false;
     }
+
+    const std::vector<Engine::Net::TradeOfferItem> previousOffer = *userOffer;
+    ECS::PlayerItemOwnershipComponent ownership =
+        Engine::Net::ToOwnershipComponent(playerIt->second.ownership);
+    if (!Engine::Net::ApplyOfferEscrowTransition(
+            ownership, previousOffer, offer, m_stackCapResolver, m_bagCapacity)) {
+        return false;
+    }
+
     *userOffer = offer;
+    playerIt->second.ownership = Engine::Net::FromOwnershipComponent(ownership);
+    playerIt->second.snapshotDirty = true;
     session->initiatorLocked = false;
     session->partnerLocked = false;
     SyncTradeStateForSession(*session);
@@ -1261,20 +1343,17 @@ bool AuthoritativeGameSimulator::LockTradeOffer(Engine::Net::UserId userId) {
 
     bool* userLock = session->LockFor(userId);
     std::vector<Engine::Net::TradeOfferItem>* userOffer = session->OfferFor(userId);
-    const auto playerIt = m_players.find(userId);
-    if (userLock == nullptr || userOffer == nullptr || playerIt == m_players.end()) {
-        return false;
-    }
-
-    const ECS::PlayerItemOwnershipComponent ownership =
-        Engine::Net::ToOwnershipComponent(playerIt->second.ownership);
-    if (!Engine::Net::CanAffordOffer(ownership, *userOffer)) {
+    if (userLock == nullptr || userOffer == nullptr) {
         return false;
     }
 
     *userLock = true;
     SyncTradeStateForSession(*session);
-    TryExecuteTrade(*session);
+    if (session->BothLocked() && !TryExecuteTrade(*session)) {
+        session->initiatorLocked = false;
+        session->partnerLocked = false;
+        SyncTradeStateForSession(*session);
+    }
     return true;
 }
 

@@ -5,9 +5,9 @@ name: RenderingEngine CI
 
 on:
   push:
-    branches: [main, master, rgrigorii/menu]
+    branches: [main, master, rgrigorii/menu, feat/concurrent-player-scale]
   pull_request:
-    branches: [main, master, rgrigorii/menu]
+    branches: [main, master, rgrigorii/menu, feat/concurrent-player-scale]
   workflow_dispatch:
 
 concurrency:

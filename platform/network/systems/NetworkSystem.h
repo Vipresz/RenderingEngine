@@ -86,6 +86,7 @@ public:
 
     EntityID EnsureRemoteEntity(Engine::Net::UserId userId, ECS::Registry& registry);
     EntityID TryGetPlayerEntity(Engine::Net::UserId userId) const;
+    Engine::Net::UserId TryGetUserIdForEntity(EntityID entity) const;
 
     const std::string& GetPeerDisplayName(Engine::Net::UserId userId) const;
 

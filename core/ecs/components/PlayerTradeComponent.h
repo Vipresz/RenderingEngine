@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/ecs/components/PlayerItemOwnershipComponent.h"
 #include "core/network/NetTypes.h"
 
 #include <cstdint>
@@ -23,12 +24,14 @@ struct TradeOfferItem {
     std::string itemId;
     uint32_t quantity = 1;
     uint64_t instanceId = 0;
+    uint16_t bagSlotIndex = kInvalidBagSlotIndex;
 };
 
 // Client-side view of an active trade session for UI and replication.
 struct PlayerTradeComponent {
     uint64_t sessionId = 0;
     Engine::Net::UserId partnerUserId = Engine::Net::kInvalidUserId;
+    Engine::Net::UserId requesterUserId = Engine::Net::kInvalidUserId;
     TradePhase phase = TradePhase::None;
     bool selfLocked = false;
     bool partnerLocked = false;

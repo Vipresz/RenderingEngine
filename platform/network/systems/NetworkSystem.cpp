@@ -195,6 +195,21 @@ EntityID NetworkSystem::TryGetPlayerEntity(Engine::Net::UserId userId) const {
     return it != m_remoteEntities.end() ? it->second : INVALID_ENTITY;
 }
 
+Engine::Net::UserId NetworkSystem::TryGetUserIdForEntity(EntityID entity) const {
+    if (entity == INVALID_ENTITY) {
+        return Engine::Net::kInvalidUserId;
+    }
+    if (entity == m_localPlayerEntity) {
+        return GetLocalUserId();
+    }
+    for (const auto& entry : m_remoteEntities) {
+        if (entry.second == entity) {
+            return entry.first;
+        }
+    }
+    return Engine::Net::kInvalidUserId;
+}
+
 void NetworkSystem::SetSendRateHz(float hz) {
     if (hz <= 0.0f) {
         m_sendIntervalSeconds = 0.0f;

@@ -3,6 +3,7 @@
 #include "core/ecs/components/PlayerItemOwnershipComponent.h"
 #include "core/network/TradeSession.h"
 
+using Engine::ECS::OwnedItemStack;
 using Engine::ECS::PlayerItemOwnershipComponent;
 using Engine::Net::TradeOfferItem;
 
@@ -99,4 +100,54 @@ TEST(TradeSessionTest, RespectsPerItemStackCapsOnExchange) {
     ASSERT_EQ(alice.ownedItems.size(), 1u);
     EXPECT_EQ(alice.ownedItems[0].itemId, "gold_coin");
     EXPECT_EQ(alice.ownedItems[0].quantity, 5u);
+}
+
+TEST(TradeSessionTest, RestoreOfferFallsBackWhenPreferredSlotOccupied) {
+    PlayerItemOwnershipComponent ownership;
+    ownership.ownerUserId = 1;
+    ownership.ownedItems.push_back(OwnedItemStack{0, "wood", 5, 0});
+
+    const std::vector<TradeOfferItem> offer = {{"gold_coin", 10, 0, 0}};
+    ASSERT_TRUE(Engine::Net::RestoreOfferToOwnership(ownership, offer));
+    EXPECT_EQ(ownership.CountItem("gold_coin"), 10u);
+    EXPECT_EQ(ownership.CountItem("wood"), 5u);
+    EXPECT_EQ(ownership.ownedItems.size(), 2u);
+}
+
+TEST(TradeSessionTest, EscrowTransitionRestoresPreviousOfferWithFallback) {
+    PlayerItemOwnershipComponent ownership;
+    ownership.ownerUserId = 1;
+    ownership.ownedItems.push_back(OwnedItemStack{0, "wood", 5, 0});
+
+    const std::vector<TradeOfferItem> previousOffer = {{"gold_coin", 10, 0, 0}};
+    const std::vector<TradeOfferItem> nextOffer;
+
+    ASSERT_TRUE(Engine::Net::ApplyOfferEscrowTransition(ownership, previousOffer, nextOffer));
+    EXPECT_EQ(ownership.CountItem("gold_coin"), 10u);
+    EXPECT_EQ(ownership.CountItem("wood"), 5u);
+}
+
+TEST(TradeSessionTest, RejectsOversizedOfferCommandPayload) {
+    Engine::Net::TradeCommand oversized;
+    oversized.action = Engine::Net::TradeAction::SetOffer;
+    oversized.offer.resize(Engine::Net::kMaxTradeOfferSlots + 1,
+                           TradeOfferItem{"gold_coin", 1, 0});
+
+    Engine::Net::TradeCommand decoded;
+    EXPECT_FALSE(Engine::Net::DeserializeTradeCommand(
+        Engine::Net::SerializeTradeCommand(oversized), decoded));
+}
+
+TEST(TradeSessionTest, EscrowedExchangeGrantsPartnerItems) {
+    PlayerItemOwnershipComponent alice;
+    PlayerItemOwnershipComponent bob;
+    alice.ownerUserId = 1;
+    bob.ownerUserId = 2;
+
+    const std::vector<TradeOfferItem> aliceOffer = {{"gold_coin", 10, 0}};
+    const std::vector<TradeOfferItem> bobOffer = {{"health_potion", 2, 0}};
+
+    ASSERT_TRUE(Engine::Net::ExecuteEscrowedTradeExchange(alice, bob, aliceOffer, bobOffer));
+    EXPECT_EQ(alice.CountItem("health_potion"), 2u);
+    EXPECT_EQ(bob.CountItem("gold_coin"), 10u);
 }

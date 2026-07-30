@@ -67,6 +67,26 @@ bool ExecuteTradeExchange(ECS::PlayerItemOwnershipComponent& leftOwnership,
                           ItemStackCapResolver stackCapResolver = nullptr,
                           uint16_t bagCapacity = ECS::kDefaultBagCapacity);
 
+// Moves items into escrow when the offer changes and restores the previous offer first.
+bool ApplyOfferEscrowTransition(ECS::PlayerItemOwnershipComponent& ownership,
+                                const std::vector<TradeOfferItem>& previousOffer,
+                                const std::vector<TradeOfferItem>& nextOffer,
+                                ItemStackCapResolver stackCapResolver = nullptr,
+                                uint16_t bagCapacity = ECS::kDefaultBagCapacity);
+
+bool RestoreOfferToOwnership(ECS::PlayerItemOwnershipComponent& ownership,
+                             const std::vector<TradeOfferItem>& offer,
+                             ItemStackCapResolver stackCapResolver = nullptr,
+                             uint16_t bagCapacity = ECS::kDefaultBagCapacity);
+
+// Items are already removed from inventory when escrowed; only grant to the partner.
+bool ExecuteEscrowedTradeExchange(ECS::PlayerItemOwnershipComponent& leftOwnership,
+                                  ECS::PlayerItemOwnershipComponent& rightOwnership,
+                                  const std::vector<TradeOfferItem>& leftOffer,
+                                  const std::vector<TradeOfferItem>& rightOffer,
+                                  ItemStackCapResolver stackCapResolver = nullptr,
+                                  uint16_t bagCapacity = ECS::kDefaultBagCapacity);
+
 ECS::PlayerTradeComponent BuildTradeView(const TradeSession& session, UserId viewerUserId);
 
 NetBuffer SerializeTradeCommand(const TradeCommand& command);

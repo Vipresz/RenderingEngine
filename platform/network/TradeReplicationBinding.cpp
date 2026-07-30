@@ -33,6 +33,9 @@ void RegisterTradeReplication(Systems::ReplicationSystem& replication) {
                 trade = &registry.AddComponent<ECS::PlayerTradeComponent>(entity);
             }
             *trade = Engine::Net::ToTradeComponent(replicated);
+            if (!trade->IsActive()) {
+                trade->Clear();
+            }
             return true;
         }});
 }
