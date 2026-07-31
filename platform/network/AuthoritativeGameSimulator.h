@@ -7,8 +7,10 @@
 #include "core/network/ItemOwnershipReplication.h"
 #include "core/network/ChatMessage.h"
 #include "core/network/MovementCommand.h"
+#include "core/network/ItemCombineRecipe.h"
 #include "core/network/TradeReplication.h"
 #include "core/network/TradeSession.h"
+#include "core/network/WorldDropReplication.h"
 #include "core/network/NetTypes.h"
 #include "core/network/ReplicationTypes.h"
 #include "core/terrain/HeightmapTerrain.h"
@@ -60,6 +62,16 @@ public:
     void SetBagCapacity(uint16_t capacity) { m_bagCapacity = capacity; }
     void SetTradeMaxDistance(float maxDistance) { m_tradeMaxDistance = maxDistance; }
     float GetTradeMaxDistance() const { return m_tradeMaxDistance; }
+    void SetPickupMaxDistance(float maxDistance) { m_pickupMaxDistance = maxDistance; }
+    float GetPickupMaxDistance() const { return m_pickupMaxDistance; }
+    void SetItemCombineRecipes(std::vector<Engine::Net::ItemCombineRecipe> recipes) {
+        m_combineRecipes = std::move(recipes);
+    }
+    size_t GetActiveWorldDropCount() const { return m_worldDrops.size(); }
+    bool HasWorldDrop(Engine::Net::NetEntityId entityId) const {
+        return m_worldDrops.find(entityId) != m_worldDrops.end();
+    }
+    void SendWorldResyncTo(Engine::Net::UserId userId);
 
     // Thread-safe: enqueue only.
     void OnClientLoggedIn(Engine::Net::UserId userId,
@@ -112,6 +124,7 @@ private:
         Engine::Net::ReplicatedPlayerTrade trade;
         uint64_t lastProcessedTick = 0;
         bool snapshotDirty = false;
+        float snapshotAccumulator = 0.0f;
         std::unordered_set<Engine::Net::UserId> visiblePeers;
     };
 
@@ -162,6 +175,28 @@ private:
     void ApplyOwnership(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
     void ApplyClientBagLayout(Engine::Net::UserId userId, Engine::Net::ReplicatedItemOwnership ownership);
     void ApplyInventoryAction(Engine::Net::UserId userId, Engine::Net::InventoryActionCommand command);
+    struct WorldDropState {
+        EntityID entity = INVALID_ENTITY;
+        std::string itemId;
+        uint32_t quantity = 0;
+        uint64_t instanceId = 0;
+        glm::vec3 position{0.0f};
+    };
+
+    void RegisterWorldDropBinding();
+    Engine::Net::NetEntityId SpawnWorldDrop(const glm::vec3& position,
+                                            const std::string& itemId,
+                                            uint32_t quantity,
+                                            uint64_t instanceId);
+    void RemoveWorldDrop(Engine::Net::NetEntityId entityId);
+    void BroadcastWorldDropRemoved(Engine::Net::NetEntityId entityId);
+    bool TryPickupWorldDrop(Engine::Net::UserId userId, Engine::Net::NetEntityId entityId);
+    bool ApplyItemCombineAction(Engine::Net::UserId userId,
+                                uint16_t primarySlotIndex,
+                                uint16_t secondarySlotIndex);
+    bool ValidateTradeSessionDistance(const Engine::Net::TradeSession& session) const;
+    std::vector<Engine::Net::NetEntityId> QueryNearbyWorldDrops(const glm::vec3& position,
+                                                                 float radius) const;
     void RegisterLoadoutBinding();
     void RegisterOwnershipBinding();
     void RegisterTradeBinding();
@@ -239,6 +274,11 @@ private:
     std::deque<Engine::Net::UserId> m_deferredVisibilityUpdates;
     std::unordered_set<Engine::Net::UserId> m_deferredVisibilityPending;
     float m_tradeMaxDistance = 8.0f;
+    float m_pickupMaxDistance = 3.0f;
+    std::vector<Engine::Net::ItemCombineRecipe> m_combineRecipes;
+    std::unordered_map<Engine::Net::NetEntityId, WorldDropState> m_worldDrops;
+    std::unordered_map<EntityID, Engine::Net::NetEntityId> m_entityToWorldDrop;
+    Engine::Net::NetEntityId m_nextWorldDropId = Engine::Net::kWorldEntityIdBase;
 };
 
 } // namespace Networking

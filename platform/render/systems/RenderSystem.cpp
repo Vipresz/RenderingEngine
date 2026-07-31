@@ -90,6 +90,9 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
     context.shader = m_shader;
     context.cameraSource = m_cameraSource;
     context.projection = m_projection;
+    context.view = m_cameraSource->GetViewMatrix();
+    context.viewProjection = context.projection * context.view;
+    context.frustumCullingEnabled = true;
     context.deltaTime = deltaTime;
     context.tickNumber = tickNumber;
     context.defaultWhiteTexture = m_defaultWhiteTexture;

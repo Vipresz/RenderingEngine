@@ -13,6 +13,7 @@ struct TlsConfig {
     std::string certificatePath;
     std::string privateKeyPath;
     std::string caCertificatePath;
+    std::string serverName;
     bool insecureSkipVerify = false;
 };
 

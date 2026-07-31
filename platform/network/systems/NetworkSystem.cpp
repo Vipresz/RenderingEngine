@@ -5,6 +5,7 @@
 #include "core/network/CharacterMovementSimulator.h"
 #include "core/network/CharacterMovementState.h"
 #include "core/network/InputBuffer.h"
+#include "core/network/WorldDropReplication.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/TransformComponent.h"
@@ -36,14 +37,23 @@ void ApplyRemoteAnimationFromPlayback(AnimationComponent& anim,
                                       float airVelocityX,
                                       float airVelocityZ,
                                       float groundLevel,
-                                      uint8_t animationState) {
+                                      uint8_t animationState,
+                                      float currentAnimationTime,
+                                      float locomotionSpeed,
+                                      bool isLooping,
+                                      bool landingActive) {
     anim.isJumping = isJumping;
     anim.jumpAnimationActive = jumpAnimationActive;
     anim.jumpVelocity = jumpVelocity;
     anim.airVelocityX = airVelocityX;
     anim.airVelocityZ = airVelocityZ;
     anim.groundLevel = groundLevel;
-    anim.locomotionSpeed = std::sqrt(airVelocityX * airVelocityX + airVelocityZ * airVelocityZ);
+    anim.locomotionSpeed = locomotionSpeed > 0.0f
+                               ? locomotionSpeed
+                               : std::sqrt(airVelocityX * airVelocityX + airVelocityZ * airVelocityZ);
+    anim.currentAnimationTime = currentAnimationTime;
+    anim.isLooping = isLooping;
+    anim.landingActive = landingActive;
 
     switch (static_cast<Engine::Net::MovementAnimationState>(animationState)) {
         case Engine::Net::MovementAnimationState::Walking:
@@ -157,6 +167,10 @@ bool NetworkSystem::IsLoggedIn() const {
     return m_client.IsLoggedIn();
 }
 
+float NetworkSystem::GetRoundTripTimeMs() const {
+    return m_client.GetRoundTripTimeMs();
+}
+
 void NetworkSystem::SetRemotePlayerModel(Engine::Platform::Render::Model* model, float scale) {
     m_remotePlayerModel = model;
     m_remotePlayerScale = scale;
@@ -228,6 +242,17 @@ bool NetworkSystem::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& s
     return m_client.SendWorldSnapshot(snapshot);
 }
 
+void NetworkSystem::RequestWorldResync() {
+    if (!m_client.IsLoggedIn()) {
+        return;
+    }
+    Engine::Net::GenericDataPayload payload;
+    payload.userId = m_client.GetUserId();
+    payload.tick = 0;
+    payload.channel = Engine::Net::kWorldResyncChannel;
+    m_client.SendGenericData(payload);
+}
+
 void NetworkSystem::SendMovementCommand(const Engine::Net::MovementCommand& command) {
     if (!m_client.IsLoggedIn()) {
         return;
@@ -248,24 +273,30 @@ void NetworkSystem::Shutdown(ECS::Registry& registry) {
 EntityID NetworkSystem::GetOrCreateRemoteEntity(Engine::Net::UserId userId, ECS::Registry& registry) {
     auto it = m_remoteEntities.find(userId);
     if (it != m_remoteEntities.end() && registry.HasComponent<TransformComponent>(it->second)) {
-        AttachRemotePlayerVisual(it->second, registry);
+        if (!Engine::Net::IsWorldEntity(userId)) {
+            AttachRemotePlayerVisual(it->second, registry);
+        }
         return it->second;
     }
 
     const ECS::Entity entity = registry.CreateEntity();
     registry.AddComponent<TransformComponent>(entity.id);
-    AttachRemotePlayerVisual(entity.id, registry);
+    if (!Engine::Net::IsWorldEntity(userId)) {
+        AttachRemotePlayerVisual(entity.id, registry);
+    }
     m_remoteEntities[userId] = entity.id;
 
-    if (m_peerEntityHandler) {
-        m_peerEntityHandler(userId, entity.id);
-    }
+    if (!Engine::Net::IsWorldEntity(userId)) {
+        if (m_peerEntityHandler) {
+            m_peerEntityHandler(userId, entity.id);
+        }
 
-    if (m_remotePlayerSetupHandler) {
-        const auto nameIt = m_peerDisplayNames.find(userId);
-        const std::string& displayName =
-            nameIt != m_peerDisplayNames.end() ? nameIt->second : ("Player" + std::to_string(userId));
-        m_remotePlayerSetupHandler(registry, entity.id, userId, displayName);
+        if (m_remotePlayerSetupHandler) {
+            const auto nameIt = m_peerDisplayNames.find(userId);
+            const std::string& displayName =
+                nameIt != m_peerDisplayNames.end() ? nameIt->second : ("Player" + std::to_string(userId));
+            m_remotePlayerSetupHandler(registry, entity.id, userId, displayName);
+        }
     }
 
     return entity.id;
@@ -332,6 +363,10 @@ void NetworkSystem::SendLocalTransform(ECS::Registry& registry, uint64_t tickNum
         payload.airVelocityZ = anim->airVelocityZ;
         payload.groundLevel = anim->groundLevel;
         payload.animationState = static_cast<uint8_t>(anim->currentState);
+        payload.currentAnimationTime = anim->currentAnimationTime;
+        payload.locomotionSpeed = anim->locomotionSpeed;
+        payload.isLooping = anim->isLooping;
+        payload.landingActive = anim->landingActive;
     }
     m_client.SendTransformState(payload);
     m_lastSentPosition = payload.position;
@@ -402,6 +437,10 @@ void NetworkSystem::SetRemoteTarget(Engine::Net::UserId userId,
     state.airVelocityZ = transform.airVelocityZ;
     state.groundLevel = transform.groundLevel;
     state.animationState = transform.animationState;
+    state.currentAnimationTime = transform.currentAnimationTime;
+    state.locomotionSpeed = transform.locomotionSpeed;
+    state.isLooping = transform.isLooping;
+    state.landingActive = transform.landingActive;
 
     if (!state.initialized) {
         state.displayPosition = resolvedPosition;
@@ -577,7 +616,11 @@ void NetworkSystem::InterpolateRemoteTransforms(float deltaTime, ECS::Registry& 
                                          state.airVelocityX,
                                          state.airVelocityZ,
                                          state.groundLevel,
-                                         state.animationState);
+                                         state.animationState,
+                                         state.currentAnimationTime,
+                                         state.locomotionSpeed,
+                                         state.isLooping,
+                                         state.landingActive);
     }
 }
 
@@ -639,20 +682,27 @@ void NetworkSystem::ProcessNetworkFrame(float deltaTime, ECS::Registry& registry
             });
             m_lastSentCommandTick = highestSent;
         }
-        return;
+    } else {
+        m_sendAccumulator += deltaTime;
+        const bool intervalElapsed =
+            m_sendIntervalSeconds <= 0.0f || m_sendAccumulator >= m_sendIntervalSeconds;
+        if (intervalElapsed && registry.HasComponent<TransformComponent>(m_localPlayerEntity)) {
+            const TransformComponent* transform =
+                registry.GetComponent<TransformComponent>(m_localPlayerEntity);
+            if (transform && ShouldSendTransform(*transform)) {
+                if (m_sendIntervalSeconds > 0.0f) {
+                    m_sendAccumulator = 0.0f;
+                }
+                SendLocalTransform(registry, tickNumber);
+            }
+        }
     }
 
-    m_sendAccumulator += deltaTime;
-    const bool intervalElapsed =
-        m_sendIntervalSeconds <= 0.0f || m_sendAccumulator >= m_sendIntervalSeconds;
-    if (intervalElapsed && registry.HasComponent<TransformComponent>(m_localPlayerEntity)) {
-        const TransformComponent* transform =
-            registry.GetComponent<TransformComponent>(m_localPlayerEntity);
-        if (transform && ShouldSendTransform(*transform)) {
-            if (m_sendIntervalSeconds > 0.0f) {
-                m_sendAccumulator = 0.0f;
-            }
-            SendLocalTransform(registry, tickNumber);
+    if (m_client.IsLoggedIn()) {
+        m_pingAccumulator += deltaTime;
+        if (m_pingIntervalSeconds > 0.0f && m_pingAccumulator >= m_pingIntervalSeconds) {
+            m_pingAccumulator = 0.0f;
+            m_client.SendPing();
         }
     }
 }

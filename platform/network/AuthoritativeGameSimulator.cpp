@@ -4,7 +4,10 @@
 #include "core/ecs/components/PlayerItemOwnershipComponent.h"
 #include "core/network/CharacterMovementSimulator.h"
 #include "core/network/ChatMessage.h"
+#include "core/network/ReplicationTierThrottle.h"
 #include "core/network/InventoryAction.h"
+#include "core/network/ItemCombineRecipe.h"
+#include "core/network/WorldDropReplication.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/TransformComponent.h"
 
@@ -28,6 +31,7 @@ AuthoritativeGameSimulator::AuthoritativeGameSimulator(NetServer& server) : m_se
     RegisterLoadoutBinding();
     RegisterOwnershipBinding();
     RegisterTradeBinding();
+    RegisterWorldDropBinding();
     m_replication.SetSnapshotSendHandler([this](const Engine::Net::EntitySnapshot& snapshot) {
         Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
             Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), 0);
@@ -35,6 +39,12 @@ AuthoritativeGameSimulator::AuthoritativeGameSimulator(NetServer& server) : m_se
         if (playerIt != m_players.end()) {
             m_server.BroadcastPacketToInterested(
                 packet, snapshot.entityId, playerIt->second.movement.position);
+            return;
+        }
+        const auto dropIt = m_worldDrops.find(snapshot.entityId);
+        if (dropIt != m_worldDrops.end()) {
+            m_server.BroadcastPacketToInterested(
+                packet, snapshot.entityId, dropIt->second.position);
             return;
         }
         m_server.BroadcastPacket(packet);
@@ -192,6 +202,11 @@ bool AuthoritativeGameSimulator::HandleGenericData(Engine::Net::UserId userId,
         }
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_pendingInventoryActions.push_back(PendingInventoryAction{userId, command});
+        return true;
+    }
+
+    if (payload.channel == Engine::Net::kWorldResyncChannel) {
+        SendWorldResyncTo(userId);
         return true;
     }
 
@@ -432,6 +447,17 @@ void AuthoritativeGameSimulator::ApplyInventoryAction(Engine::Net::UserId userId
     if (it == m_players.end()) {
         return;
     }
+
+    if (command.action == Engine::Net::InventoryActionType::Pickup) {
+        TryPickupWorldDrop(userId, command.worldEntityId);
+        return;
+    }
+
+    if (command.action == Engine::Net::InventoryActionType::Combine) {
+        ApplyItemCombineAction(userId, command.slotIndex, command.secondarySlotIndex);
+        return;
+    }
+
     if (command.slotIndex >= m_bagCapacity) {
         return;
     }
@@ -461,9 +487,16 @@ void AuthoritativeGameSimulator::ApplyInventoryAction(Engine::Net::UserId userId
     }
 
     bool success = false;
+    std::string droppedItemId;
+    uint32_t droppedQuantity = 0;
+    uint64_t droppedInstanceId = 0;
+
     if (command.action == Engine::Net::InventoryActionType::Use) {
         success = component.RemoveFromSlot(command.slotIndex, 1, false);
     } else if (command.action == Engine::Net::InventoryActionType::Drop) {
+        droppedItemId = stackIt->itemId;
+        droppedQuantity = stackIt->quantity;
+        droppedInstanceId = stackIt->instanceId;
         success = component.RemoveFromSlot(command.slotIndex, 0, true);
     }
 
@@ -474,6 +507,13 @@ void AuthoritativeGameSimulator::ApplyInventoryAction(Engine::Net::UserId userId
     it->second.ownership = Engine::Net::FromOwnershipComponent(component);
     it->second.snapshotDirty = true;
     FlushDirtySnapshotForUser(userId);
+
+    if (command.action == Engine::Net::InventoryActionType::Drop && !droppedItemId.empty() &&
+        droppedQuantity > 0) {
+        glm::vec3 dropPosition = it->second.movement.position;
+        dropPosition.y = it->second.movement.groundLevel;
+        SpawnWorldDrop(dropPosition, droppedItemId, droppedQuantity, droppedInstanceId);
+    }
 }
 
 uint32_t AuthoritativeGameSimulator::ResolveStackCap(const std::string& itemId) const {
@@ -718,15 +758,40 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
     DrainQueues();
     ProcessDeferredVisibilityUpdates();
 
+    const Engine::Net::ScalePolicyConfig& policy = m_server.GetScalePolicyConfig();
+    const uint32_t cellDensity = m_server.GetInterestManager().GetMaxCellDensity();
+    const bool layeringActive =
+        policy.IsLayeringActive(static_cast<uint32_t>(m_players.size()), cellDensity);
+    for (auto& entry : m_players) {
+        m_server.UpdateCellLayerForPlayer(entry.first, entry.second.movement.position);
+    }
+
     m_snapshotAccumulator += deltaTime;
     if (m_snapshotAccumulator >= m_snapshotIntervalSeconds) {
         m_snapshotAccumulator = 0.0f;
         ++m_tickNumber;
+        m_server.SetReplicationTickNumber(m_tickNumber);
 
         for (auto& entry : m_players) {
             if (!entry.second.snapshotDirty) {
                 continue;
             }
+
+            Engine::Net::ReplicationTier snapshotTier = Engine::Net::ReplicationTier::Full;
+            if (layeringActive && m_server.GetCellLayerAssigner().GetPlayerLayer(entry.first) > 0) {
+                snapshotTier = Engine::Net::ReplicationTier::Mid;
+            }
+            const float playerInterval = Engine::Net::SnapshotIntervalForTier(
+                snapshotTier,
+                policy.snapshotIntervalNormalSeconds,
+                policy.snapshotIntervalCrowdedSeconds,
+                policy.snapshotIntervalStressedSeconds);
+            entry.second.snapshotAccumulator += m_snapshotIntervalSeconds;
+            if (entry.second.snapshotAccumulator < playerInterval) {
+                continue;
+            }
+            entry.second.snapshotAccumulator = 0.0f;
+
             const Engine::Net::EntitySnapshot snapshot =
                 m_replication.BuildEntitySnapshot(entry.first, m_registry, m_tickNumber);
             if (snapshot.components.empty()) {
@@ -741,6 +806,8 @@ void AuthoritativeGameSimulator::Update(float deltaTime) {
             entry.second.snapshotDirty = false;
             ++m_tickDirtySnapshotsSent;
         }
+    } else {
+        m_server.SetReplicationTickNumber(m_tickNumber);
     }
 
     for (auto& entry : m_players) {
@@ -918,13 +985,13 @@ void AuthoritativeGameSimulator::SendWorldSnapshotTo(Engine::Net::UserId userId,
         observerPosition = playerIt->second.movement.position;
     }
 
+    const float interestRadius = m_server.GetInterestManager().GetDefaultInterestRadius();
     std::vector<Engine::Net::UserId> nearbyUsers =
-        m_server.GetInterestManager().QueryNearbyUsers(
-            observerPosition, m_server.GetInterestManager().GetDefaultInterestRadius());
+        m_server.GetInterestManager().QueryNearbyUsers(observerPosition, interestRadius);
 
     Engine::Net::WorldSnapshotPayload world;
     world.tick = tick;
-    world.entities.reserve(nearbyUsers.size());
+    world.entities.reserve(nearbyUsers.size() + m_worldDrops.size());
     for (Engine::Net::UserId entityUserId : nearbyUsers) {
         const auto entryIt = m_players.find(entityUserId);
         if (entryIt == m_players.end()) {
@@ -933,7 +1000,16 @@ void AuthoritativeGameSimulator::SendWorldSnapshotTo(Engine::Net::UserId userId,
         world.entities.push_back(
             m_replication.BuildEntitySnapshot(entityUserId, m_registry, tick));
     }
+
+    for (Engine::Net::NetEntityId dropId : QueryNearbyWorldDrops(observerPosition, interestRadius)) {
+        world.entities.push_back(m_replication.BuildEntitySnapshot(dropId, m_registry, tick));
+    }
+
     m_server.SendWorldSnapshotTo(userId, world);
+}
+
+void AuthoritativeGameSimulator::SendWorldResyncTo(Engine::Net::UserId userId) {
+    SendWorldSnapshotTo(userId, m_tickNumber);
 }
 
 void AuthoritativeGameSimulator::EnqueueDeferredVisibilityUpdate(Engine::Net::UserId observerId) {
@@ -1068,6 +1144,189 @@ void AuthoritativeGameSimulator::RegisterTradeBinding() {
         [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
             return true;
         }});
+}
+
+void AuthoritativeGameSimulator::RegisterWorldDropBinding() {
+    Engine::Net::ReplicationComponentDescriptor dropDesc;
+    dropDesc.id = Engine::Net::kWorldDropReplicationComponent;
+    dropDesc.name = "WorldDrop";
+    m_replication.GetRegistry().Register(std::move(dropDesc));
+
+    m_replication.RegisterComponentBinding(Systems::ReplicationComponentBinding{
+        Engine::Net::kWorldDropReplicationComponent,
+        [this](EntityID entity, ECS::Registry& /*registry*/, Engine::Net::NetBuffer& out) {
+            const auto netIt = m_entityToWorldDrop.find(entity);
+            if (netIt == m_entityToWorldDrop.end()) {
+                return false;
+            }
+            const auto dropIt = m_worldDrops.find(netIt->second);
+            if (dropIt == m_worldDrops.end()) {
+                return false;
+            }
+            Engine::Net::ReplicatedWorldDrop drop;
+            drop.itemId = dropIt->second.itemId;
+            drop.quantity = dropIt->second.quantity;
+            drop.instanceId = dropIt->second.instanceId;
+            out = drop.Serialize();
+            return true;
+        },
+        [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
+            return true;
+        }});
+}
+
+Engine::Net::NetEntityId AuthoritativeGameSimulator::SpawnWorldDrop(const glm::vec3& position,
+                                                                  const std::string& itemId,
+                                                                  uint32_t quantity,
+                                                                  uint64_t instanceId) {
+    if (itemId.empty() || quantity == 0) {
+        return Engine::Net::kInvalidNetEntity;
+    }
+
+    const Engine::Net::NetEntityId netEntityId = m_nextWorldDropId++;
+    const ECS::Entity entity = m_registry.CreateEntity();
+    auto& transform = m_registry.AddComponent<TransformComponent>(entity.id);
+    transform.SetPosition(position.x, position.y, position.z);
+    transform.SetScale(0.35f);
+
+    WorldDropState drop;
+    drop.entity = entity.id;
+    drop.itemId = itemId;
+    drop.quantity = quantity;
+    drop.instanceId = instanceId;
+    drop.position = position;
+    m_worldDrops.emplace(netEntityId, drop);
+    m_entityToWorldDrop[entity.id] = netEntityId;
+    m_replication.RegisterReplicatedEntity(netEntityId, entity.id);
+
+    const Engine::Net::EntitySnapshot snapshot =
+        m_replication.BuildEntitySnapshot(netEntityId, m_registry, m_tickNumber);
+    if (!snapshot.components.empty()) {
+        Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
+            Engine::Net::MessageType::EntitySnapshot, snapshot.Serialize(), 0);
+        m_server.BroadcastPacketToInterested(packet, netEntityId, position);
+    }
+    return netEntityId;
+}
+
+void AuthoritativeGameSimulator::BroadcastWorldDropRemoved(Engine::Net::NetEntityId entityId) {
+    Engine::Net::PeerEventPayload left;
+    left.userId = entityId;
+    left.displayName = "WorldDrop";
+    m_server.BroadcastPacket(Engine::Net::MakeMessage(
+        Engine::Net::MessageType::PeerLeft, left.Serialize(), 0));
+}
+
+void AuthoritativeGameSimulator::RemoveWorldDrop(Engine::Net::NetEntityId entityId) {
+    const auto dropIt = m_worldDrops.find(entityId);
+    if (dropIt == m_worldDrops.end()) {
+        return;
+    }
+
+    m_entityToWorldDrop.erase(dropIt->second.entity);
+    m_replication.UnregisterReplicatedEntity(entityId);
+    m_registry.DestroyEntity(dropIt->second.entity);
+    m_worldDrops.erase(dropIt);
+    BroadcastWorldDropRemoved(entityId);
+}
+
+bool AuthoritativeGameSimulator::TryPickupWorldDrop(Engine::Net::UserId userId,
+                                                  Engine::Net::NetEntityId entityId) {
+    const auto playerIt = m_players.find(userId);
+    const auto dropIt = m_worldDrops.find(entityId);
+    if (playerIt == m_players.end() || dropIt == m_worldDrops.end()) {
+        return false;
+    }
+
+    if (m_pickupMaxDistance > 0.0f) {
+        const glm::vec3 delta = dropIt->second.position - playerIt->second.movement.position;
+        const float horizontalDistanceSq = delta.x * delta.x + delta.z * delta.z;
+        if (horizontalDistanceSq > m_pickupMaxDistance * m_pickupMaxDistance) {
+            return false;
+        }
+    }
+
+    if (!GrantOwnedItem(userId, dropIt->second.itemId, dropIt->second.quantity,
+                        dropIt->second.instanceId)) {
+        return false;
+    }
+
+    RemoveWorldDrop(entityId);
+    FlushDirtySnapshotForUser(userId);
+    return true;
+}
+
+bool AuthoritativeGameSimulator::ApplyItemCombineAction(Engine::Net::UserId userId,
+                                                        uint16_t primarySlotIndex,
+                                                        uint16_t secondarySlotIndex) {
+    if (m_combineRecipes.empty()) {
+        return false;
+    }
+
+    auto it = m_players.find(userId);
+    if (it == m_players.end()) {
+        return false;
+    }
+    if (primarySlotIndex >= m_bagCapacity || secondarySlotIndex >= m_bagCapacity) {
+        return false;
+    }
+
+    ECS::PlayerItemOwnershipComponent component =
+        Engine::Net::ToOwnershipComponent(it->second.ownership);
+
+    const ECS::OwnedItemStack* primaryStack = nullptr;
+    const ECS::OwnedItemStack* secondaryStack = nullptr;
+    for (const ECS::OwnedItemStack& stack : component.ownedItems) {
+        if (stack.slotIndex == primarySlotIndex) {
+            primaryStack = &stack;
+        } else if (stack.slotIndex == secondarySlotIndex) {
+            secondaryStack = &stack;
+        }
+    }
+    if (primaryStack == nullptr || secondaryStack == nullptr) {
+        return false;
+    }
+
+    const std::optional<Engine::Net::ItemCombineRecipe> recipe =
+        Engine::Net::FindCombineRecipe(m_combineRecipes, primaryStack->itemId, secondaryStack->itemId);
+    if (!recipe.has_value()) {
+        return false;
+    }
+
+    if (!Engine::Net::ApplyItemCombine(
+            component,
+            primarySlotIndex,
+            secondarySlotIndex,
+            *recipe,
+            m_stackCapResolver,
+            m_bagCapacity)) {
+        return false;
+    }
+
+    it->second.ownership = Engine::Net::FromOwnershipComponent(component);
+    it->second.snapshotDirty = true;
+    FlushDirtySnapshotForUser(userId);
+    return true;
+}
+
+std::vector<Engine::Net::NetEntityId> AuthoritativeGameSimulator::QueryNearbyWorldDrops(
+    const glm::vec3& position,
+    float radius) const {
+    std::vector<Engine::Net::NetEntityId> nearby;
+    const float radiusSq = radius * radius;
+    for (const auto& entry : m_worldDrops) {
+        const glm::vec3 delta = entry.second.position - position;
+        const float horizontalDistanceSq = delta.x * delta.x + delta.z * delta.z;
+        if (horizontalDistanceSq <= radiusSq) {
+            nearby.push_back(entry.first);
+        }
+    }
+    return nearby;
+}
+
+bool AuthoritativeGameSimulator::ValidateTradeSessionDistance(
+    const Engine::Net::TradeSession& session) const {
+    return ArePlayersWithinTradeRange(session.initiatorUserId, session.partnerUserId);
 }
 
 bool AuthoritativeGameSimulator::PlayerAvailableForTrade(Engine::Net::UserId userId) const {
@@ -1210,6 +1469,11 @@ bool AuthoritativeGameSimulator::TryExecuteTrade(Engine::Net::TradeSession& sess
     if (!session.BothLocked() || !session.IsOpen()) {
         return false;
     }
+    const uint64_t sessionId = session.sessionId;
+    if (!ValidateTradeSessionDistance(session)) {
+        EndTradeSession(sessionId, ECS::TradePhase::Cancelled);
+        return false;
+    }
 
     auto initiatorIt = m_players.find(session.initiatorUserId);
     auto partnerIt = m_players.find(session.partnerUserId);
@@ -1304,6 +1568,14 @@ bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
     if (session == nullptr || !session->IsOpen()) {
         return false;
     }
+    const uint64_t sessionId = session->sessionId;
+    if (!ValidateTradeSessionDistance(*session)) {
+        EndTradeSession(sessionId, ECS::TradePhase::Cancelled);
+        return false;
+    }
+    if (session->initiatorLocked || session->partnerLocked) {
+        return false;
+    }
     if (!Engine::Net::IsValidTradeOffer(offer)) {
         return false;
     }
@@ -1329,8 +1601,6 @@ bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
     *userOffer = offer;
     playerIt->second.ownership = Engine::Net::FromOwnershipComponent(ownership);
     playerIt->second.snapshotDirty = true;
-    session->initiatorLocked = false;
-    session->partnerLocked = false;
     SyncTradeStateForSession(*session);
     return true;
 }
@@ -1338,6 +1608,11 @@ bool AuthoritativeGameSimulator::SetTradeOffer(Engine::Net::UserId userId,
 bool AuthoritativeGameSimulator::LockTradeOffer(Engine::Net::UserId userId) {
     Engine::Net::TradeSession* session = FindTradeSessionFor(userId);
     if (session == nullptr || !session->IsOpen()) {
+        return false;
+    }
+    const uint64_t sessionId = session->sessionId;
+    if (!ValidateTradeSessionDistance(*session)) {
+        EndTradeSession(sessionId, ECS::TradePhase::Cancelled);
         return false;
     }
 

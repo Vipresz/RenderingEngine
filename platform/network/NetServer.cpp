@@ -4,9 +4,12 @@
 
 #include "Logger.h"
 
-#include "core/network/SecureCompare.h"
+#include "core/network/NetworkAuth.h"
+#include "core/network/MigrationToken.h"
 #include "core/network/ReplicationTier.h"
+#include "core/network/ReplicationTierThrottle.h"
 #include "core/network/LayerInstancePolicy.h"
+#include "core/network/ServerSecurityPolicy.h"
 
 #include <chrono>
 
@@ -15,6 +18,8 @@
 #include <thread>
 
 #include <algorithm>
+
+#include <unordered_map>
 
 #include <cctype>
 
@@ -105,15 +110,7 @@ std::string SanitizeDisplayName(const std::string& raw) {
 
 
 bool AuthTokenMatches(const std::string& required, const std::string& provided) {
-
-    if (required.empty()) {
-
-        return true;
-
-    }
-
-    return Engine::Net::SecureCompare(required, provided);
-
+    return Engine::Net::VerifyAuthToken(required, provided);
 }
 
 
@@ -130,7 +127,7 @@ namespace Networking {
 
 
 
-NetServer::NetServer() = default;
+NetServer::NetServer() : m_cellLayerAssigner(m_scalePolicy) {}
 
 
 
@@ -146,7 +143,12 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
 
     Stop();
 
-
+    if (!Engine::Net::CanAcceptLogin(m_securityPolicy, m_requiredAuthToken, m_credentialStore)) {
+        LOG_ERROR("NetServer",
+                  "Refusing to start: enforceAuthentication is enabled but no auth token or "
+                  "credential store is configured");
+        return false;
+    }
 
     if (!Socket::InitializeNetworking()) {
 
@@ -262,6 +264,9 @@ bool NetServer::Start(const std::string& host, uint16_t port, uint16_t udpPort) 
 
     });
 
+    m_udpChannel.SetEncryptPayloads(m_securityPolicy.encryptUdpPayloads);
+    m_udpChannel.SetAuthTokenForEncryption(m_requiredAuthToken);
+
 
 
     m_running = true;
@@ -358,7 +363,7 @@ size_t NetServer::GetLoggedInClientCount() const {
 size_t NetServer::CountLoggedInClientsUnlocked() const {
     size_t count = 0;
     for (const auto& entry : m_clients) {
-        if (entry.second && !entry.second->displayName.empty()) {
+        if (entry.second && entry.second->loggedIn) {
             ++count;
         }
     }
@@ -491,6 +496,7 @@ bool NetServer::DeliverTransformToObserver(Engine::Net::UserId observerId,
                                            bool layeringActive,
                                            const Engine::Net::EffectiveLayerRadii& radii) {
     Engine::Net::TransformStatePayload outgoing = transform;
+    Engine::Net::ReplicationTier tier = Engine::Net::ReplicationTier::Full;
     if (layeringActive && observerId != sourceUserId) {
         glm::vec3 observerPosition = transform.position;
         {
@@ -500,10 +506,15 @@ bool NetServer::DeliverTransformToObserver(Engine::Net::UserId observerId,
             }
         }
         const glm::vec3 delta = transform.position - observerPosition;
-        const Engine::Net::ReplicationTier tier =
-            Engine::Net::ClassifyReplicationTier(glm::dot(delta, delta), radii);
+        tier = Engine::Net::ClassifyReplicationTier(glm::dot(delta, delta), radii);
+        if (m_cellLayerAssigner.ShouldIsolateLayers(observerId, sourceUserId)) {
+            tier = Engine::Net::MaxReplicationTier(tier, Engine::Net::ReplicationTier::Mid);
+        }
         if (tier == Engine::Net::ReplicationTier::Hidden) {
             return false;
+        }
+        if (!Engine::Net::ShouldSendTransformForTier(tier, GetReplicationTickNumber())) {
+            return true;
         }
         outgoing = Engine::Net::ReduceTransformForTier(transform, tier);
     }
@@ -559,15 +570,58 @@ size_t NetServer::FlushPendingPeerTransforms(size_t maxSends) {
 
     size_t sent = 0;
     std::deque<PendingPeerTransform> failed;
+    std::unordered_map<Engine::Net::UserId, std::vector<Engine::Net::TransformStatePayload>> batchedByObserver;
     for (const PendingPeerTransform& pending : batch) {
-        if (DeliverTransformToObserver(pending.observerId,
-                                       pending.sourceUserId,
-                                       pending.transform,
-                                       layeringActive,
-                                       radii)) {
-            ++sent;
-        } else {
-            failed.push_back(pending);
+        Engine::Net::TransformStatePayload outgoing = pending.transform;
+        Engine::Net::ReplicationTier tier = Engine::Net::ReplicationTier::Full;
+        if (layeringActive && pending.observerId != pending.sourceUserId) {
+            glm::vec3 observerPosition = pending.transform.position;
+            {
+                std::lock_guard<std::mutex> lock(m_worldMutex);
+                if (!m_interestManager.TryGetEntityPosition(pending.observerId, observerPosition)) {
+                    observerPosition = pending.transform.position;
+                }
+            }
+            const glm::vec3 delta = pending.transform.position - observerPosition;
+            tier = Engine::Net::ClassifyReplicationTier(glm::dot(delta, delta), radii);
+            if (m_cellLayerAssigner.ShouldIsolateLayers(pending.observerId, pending.sourceUserId)) {
+                tier = Engine::Net::MaxReplicationTier(tier, Engine::Net::ReplicationTier::Mid);
+            }
+            if (tier == Engine::Net::ReplicationTier::Hidden) {
+                continue;
+            }
+            if (!Engine::Net::ShouldSendTransformForTier(tier, GetReplicationTickNumber())) {
+                ++sent;
+                continue;
+            }
+            outgoing = Engine::Net::ReduceTransformForTier(pending.transform, tier);
+        }
+
+        batchedByObserver[pending.observerId].push_back(std::move(outgoing));
+    }
+
+    for (auto& observerEntry : batchedByObserver) {
+        std::vector<Engine::Net::TransformStatePayload>& transforms = observerEntry.second;
+        size_t index = 0;
+        while (index < transforms.size()) {
+            const size_t batchCount = (std::min)(transforms.size() - index,
+                                                 static_cast<size_t>(
+                                                     Engine::Net::TransformBatchPayload::kMaxTransformsPerBatch));
+            const std::vector<Engine::Net::TransformStatePayload> slice(
+                transforms.begin() + static_cast<std::ptrdiff_t>(index),
+                transforms.begin() + static_cast<std::ptrdiff_t>(index + batchCount));
+            if (SendUdpTransformBatchTo(observerEntry.first, slice)) {
+                sent += batchCount;
+            } else {
+                for (size_t i = 0; i < batchCount; ++i) {
+                    PendingPeerTransform failedPending;
+                    failedPending.observerId = observerEntry.first;
+                    failedPending.sourceUserId = slice[i].userId;
+                    failedPending.transform = slice[i];
+                    failed.push_back(std::move(failedPending));
+                }
+            }
+            index += batchCount;
         }
     }
     RequeueFailedTransforms(failed);
@@ -728,6 +782,12 @@ void NetServer::SendInterestFilteredJoinState(Engine::Net::UserId userId, const 
 
             }
 
+            if (!it->second->loggedIn) {
+
+                continue;
+
+            }
+
             displayName = it->second->displayName;
 
         }
@@ -795,6 +855,7 @@ void NetServer::StoreAuthoritativeTransform(Engine::Net::UserId userId,
     m_authority.ApplyAuthoritative(userId, transform);
 
     m_interestManager.UpdateEntity(userId, transform.position);
+    UpdateCellLayerForPlayer(userId, transform.position);
 
 }
 
@@ -809,6 +870,7 @@ void NetServer::ClearClientWorldState(Engine::Net::UserId userId) {
     m_authority.RemoveUser(userId);
 
     m_interestManager.RemoveEntity(userId);
+    m_cellLayerAssigner.RemovePlayer(userId);
 
 }
 
@@ -916,22 +978,15 @@ size_t NetServer::PollClients() {
 
 
 
-    for (auto& entry : messages) {
-
-        HandleClientMessage(entry.first, entry.second);
-
+    for (Engine::Net::UserId userId : disconnected) {
+        RemoveClient(userId);
     }
 
-
-
-    for (Engine::Net::UserId userId : disconnected) {
-
-        RemoveClient(userId);
-
+    for (auto& entry : messages) {
+        HandleClientMessage(entry.first, entry.second);
     }
 
     return messages.size();
-
 }
 
 
@@ -958,7 +1013,7 @@ void NetServer::RemoveClient(Engine::Net::UserId userId) {
 
         }
 
-        wasLoggedIn = !it->second->displayName.empty();
+        wasLoggedIn = it->second->loggedIn;
 
         event.displayName = it->second->displayName;
 
@@ -1009,6 +1064,7 @@ void NetServer::SetShardConfig(const Engine::Net::ShardConfig& config) {
 
 void NetServer::SetScalePolicyConfig(const Engine::Net::ScalePolicyConfig& config) {
     m_scalePolicy = config;
+    m_cellLayerAssigner.SetPolicy(config);
     if (config.shardHardCap > 0) {
         m_shardConfig.maxPlayers = config.shardHardCap;
     }
@@ -1019,6 +1075,19 @@ void NetServer::SetScalePolicyConfig(const Engine::Net::ScalePolicyConfig& confi
         m_interestManager.SetDefaultInterestRadius(config.layerFarRadius);
     }
     m_interestManager.SetMaxObserversPerBroadcast(config.observersCapNormal);
+}
+
+void NetServer::SetReplicationTickNumber(uint64_t tickNumber) {
+    m_replicationTickNumber.store(tickNumber, std::memory_order_release);
+}
+
+uint64_t NetServer::GetReplicationTickNumber() const {
+    return m_replicationTickNumber.load(std::memory_order_acquire);
+}
+
+void NetServer::UpdateCellLayerForPlayer(Engine::Net::UserId userId, const glm::vec3& position) {
+    const size_t cellPopulation = m_interestManager.CountUsersInCell(position);
+    m_cellLayerAssigner.UpdatePlayer(userId, position, cellPopulation);
 }
 
 void NetServer::ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config) {
@@ -1089,10 +1158,36 @@ void NetServer::FillRedirectResponse(Engine::Net::LoginResponsePayload& response
 }
 
 void NetServer::SendLayerMigrationRedirect(Engine::Net::UserId userId) {
+    const uint32_t targetShardId = m_shardConfig.overflowShardId != 0 ? m_shardConfig.overflowShardId
+                                                                        : m_shardConfig.shardId;
+    const uint64_t expiryUnixSeconds =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count()) +
+        120;
+
+    Engine::Net::ZoneTransferPayload transfer;
+    transfer.userId = userId;
+    transfer.shardId = targetShardId;
+    transfer.redirectHost = m_shardConfig.redirectHost;
+    transfer.redirectTcpPort = m_shardConfig.redirectTcpPort;
+    transfer.redirectUdpPort = m_shardConfig.redirectUdpPort;
+    transfer.reason = "layer_split";
+    if (!m_requiredAuthToken.empty()) {
+        transfer.migrationToken = Engine::Net::IssueMigrationToken(
+            userId, m_shardConfig.shardId, targetShardId, expiryUnixSeconds, m_requiredAuthToken);
+    }
+
+    SendToClient(userId, Engine::Net::MakeMessage(
+                             Engine::Net::MessageType::ZoneTransfer,
+                             transfer.Serialize(),
+                             m_sequence++));
+
     Engine::Net::LoginResponsePayload response;
     response.assignedUserId = userId;
     FillRedirectResponse(response);
     response.message = "layer_split";
+    response.migrationToken = transfer.migrationToken;
     SendToClient(userId, Engine::Net::MakeMessage(
                              Engine::Net::MessageType::LoginResponse,
                              response.Serialize(),
@@ -1172,7 +1267,19 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
             }
 
-
+            if (!m_securityPolicy.allowOpenLogin &&
+                !Engine::Net::IsAuthenticationConfigured(m_requiredAuthToken, m_credentialStore)) {
+                Engine::Net::LoginResponsePayload response;
+                response.success = false;
+                response.assignedUserId = userId;
+                response.message = "open_login_disabled";
+                SendToClient(userId,
+                             Engine::Net::MakeMessage(Engine::Net::MessageType::LoginResponse,
+                                                      response.Serialize(),
+                                                      m_sequence++));
+                LOG_WARNING_FMT("NetServer", "Rejected login for user %u (open login disabled)", userId);
+                break;
+            }
 
             if (!AuthTokenMatches(m_requiredAuthToken, request.authToken)) {
 
@@ -1232,6 +1339,31 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
 
 
+            if (!request.migrationToken.empty()) {
+                Engine::Net::MigrationTokenPayload migration;
+                if (!Engine::Net::ParseMigrationToken(request.migrationToken, migration) ||
+                    !Engine::Net::VerifyMigrationToken(
+                        migration,
+                        m_requiredAuthToken,
+                        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                                  std::chrono::system_clock::now().time_since_epoch())
+                                                  .count()))) {
+                    Engine::Net::LoginResponsePayload response;
+                    response.success = false;
+                    response.assignedUserId = userId;
+                    response.message = "invalid_migration_token";
+                    SendToClient(userId, Engine::Net::MakeMessage(
+                                             Engine::Net::MessageType::LoginResponse,
+                                             response.Serialize(),
+                                             m_sequence++));
+                    LOG_WARNING_FMT("NetServer", "Rejected migration login for user %u", userId);
+                    break;
+                }
+                request.preferredUserId = migration.userId;
+            }
+
+
+
             if (!m_loginRateLimiter.TryConsume(0)) {
                 m_loginAttemptsDropped.fetch_add(1, std::memory_order_relaxed);
 
@@ -1255,6 +1387,7 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
             Engine::Net::LoginResponsePayload response;
             response.assignedUserId = userId;
             bool loginAccepted = false;
+            bool firstLogin = false;
 
             {
                 std::lock_guard<std::mutex> lock(m_clientsMutex);
@@ -1263,6 +1396,45 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                 if (it == m_clients.end()) {
                     return;
                 }
+
+                Engine::Net::UserId effectiveUserId = userId;
+                if (request.preferredUserId != Engine::Net::kInvalidUserId &&
+                    request.preferredUserId != userId) {
+                    const auto preferredIt = m_clients.find(request.preferredUserId);
+                    bool preferredSlotAvailable = preferredIt == m_clients.end();
+                    if (!preferredSlotAvailable && preferredIt->second) {
+                        const bool pendingSlot = !preferredIt->second->loggedIn;
+                        const bool staleSession =
+                            preferredIt->second->loggedIn &&
+                            (!preferredIt->second->connection ||
+                             !preferredIt->second->connection->IsConnected());
+                        preferredSlotAvailable = pendingSlot || staleSession;
+                    }
+                    if (preferredSlotAvailable) {
+                        if (preferredIt != m_clients.end()) {
+                            if (preferredIt->second && preferredIt->second->connection) {
+                                preferredIt->second->connection->Close();
+                            }
+                            m_clients.erase(preferredIt);
+                        }
+                        auto migratedClient = std::move(it->second);
+                        m_clients.erase(it);
+                        migratedClient->userId = request.preferredUserId;
+                        effectiveUserId = request.preferredUserId;
+                        m_clients[effectiveUserId] = std::move(migratedClient);
+                        it = m_clients.find(effectiveUserId);
+                        if (m_nextUserId <= request.preferredUserId) {
+                            m_nextUserId = request.preferredUserId + 1;
+                        }
+                    }
+                }
+
+                if (it == m_clients.end() || !it->second) {
+                    return;
+                }
+
+                userId = effectiveUserId;
+                response.assignedUserId = effectiveUserId;
 
                 const uint32_t localPlayers = static_cast<uint32_t>(CountLoggedInClientsUnlocked());
                 const uint32_t overflowPlayers = m_overflowLayerPopulation.load(std::memory_order_relaxed);
@@ -1286,8 +1458,10 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                         response.message = "shard_full";
                     }
                 } else {
+                    firstLogin = !it->second->loggedIn;
                     it->second->displayName = displayName;
                     it->second->udpSessionToken = GenerateSessionToken();
+                    it->second->loggedIn = true;
                     loginAccepted = true;
                     response.success = true;
                     response.message = "ok";
@@ -1316,7 +1490,7 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
 
 
-            if (!m_authoritativeMode) {
+            if (!m_authoritativeMode && firstLogin) {
                 Engine::Net::PeerEventPayload joined;
 
                 joined.userId = userId;
@@ -1330,9 +1504,12 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
                           userId);
             }
 
-            LOG_INFO_FMT("NetServer", "Client logged in as %u (%s)", userId, displayName.c_str());
+            LOG_INFO_FMT("NetServer", "Client logged in as %u (%s)%s",
+                         userId,
+                         displayName.c_str(),
+                         firstLogin ? "" : " (re-login)");
 
-            if (m_clientLoggedInCallback) {
+            if (firstLogin && m_clientLoggedInCallback) {
 
                 m_clientLoggedInCallback(userId, displayName);
 
@@ -1424,6 +1601,25 @@ void NetServer::HandleClientMessage(Engine::Net::UserId userId, const Engine::Ne
 
             break;
 
+        }
+
+        case Engine::Net::MessageType::Ping: {
+            Engine::Net::PingPayload ping;
+            if (!Engine::Net::PingPayload::Deserialize(message.payload, ping)) {
+                break;
+            }
+
+            Engine::Net::PongPayload pong;
+            pong.sequence = ping.sequence;
+            pong.sentTimestampMs = ping.sentTimestampMs;
+            pong.serverTimestampMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                             std::chrono::steady_clock::now().time_since_epoch())
+                                                             .count());
+            SendToClient(userId,
+                         Engine::Net::MakeMessage(Engine::Net::MessageType::Pong,
+                                                  pong.Serialize(),
+                                                  m_sequence++));
+            break;
         }
 
         default:
@@ -1612,6 +1808,23 @@ bool NetServer::SendUdpTransformTo(Engine::Net::UserId userId,
     return SendUdpPayloadTo(userId,
                             Engine::Net::MessageType::UnreliableTransform,
                             transform.Serialize());
+}
+
+bool NetServer::SendUdpTransformBatchTo(
+    Engine::Net::UserId userId,
+    const std::vector<Engine::Net::TransformStatePayload>& transforms) {
+    if (transforms.empty()) {
+        return true;
+    }
+    if (transforms.size() == 1) {
+        return SendUdpTransformTo(userId, transforms.front());
+    }
+
+    Engine::Net::TransformBatchPayload batch;
+    batch.transforms = transforms;
+    return SendUdpPayloadTo(userId,
+                            Engine::Net::MessageType::UnreliableTransformBatch,
+                            batch.Serialize());
 }
 
 void NetServer::Broadcast(const Engine::Net::NetPacket& message, Engine::Net::UserId excludeUserId) {

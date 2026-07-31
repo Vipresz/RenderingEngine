@@ -1,9 +1,12 @@
 #include "render/passes/RenderPassMeshDraw.h"
 
 #include "core/ecs/Registry.h"
+#include "render/Frustum.h"
+#include "render/RenderLodSelection.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/MeshComponent.h"
+#include "render/components/MeshLodComponent.h"
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
 #include "render/Skeleton.h"
@@ -13,6 +16,7 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -45,6 +49,41 @@ bool PassesOpacityFilter(const Engine::Platform::Render::Components::MaterialCom
     return transparentPass ? opacity < kOpaqueCutoff : opacity >= kOpaqueCutoff;
 }
 
+bool ComputeWorldBounds(const Engine::Platform::Render::Model& model,
+                        const glm::mat4& modelMatrix,
+                        glm::vec3& outMin,
+                        glm::vec3& outMax) {
+    float minX = 0.0f;
+    float maxX = 0.0f;
+    float minY = 0.0f;
+    float maxY = 0.0f;
+    float minZ = 0.0f;
+    float maxZ = 0.0f;
+    model.GetBounds(minX, maxX, minY, maxY, minZ, maxZ);
+
+    const glm::vec3 localMin(minX, minY, minZ);
+    const glm::vec3 localMax(maxX, maxY, maxZ);
+    const glm::vec3 corners[8] = {
+        {localMin.x, localMin.y, localMin.z},
+        {localMax.x, localMin.y, localMin.z},
+        {localMin.x, localMax.y, localMin.z},
+        {localMax.x, localMax.y, localMin.z},
+        {localMin.x, localMin.y, localMax.z},
+        {localMax.x, localMin.y, localMax.z},
+        {localMin.x, localMax.y, localMax.z},
+        {localMax.x, localMax.y, localMax.z},
+    };
+
+    outMin = glm::vec3(std::numeric_limits<float>::max());
+    outMax = glm::vec3(std::numeric_limits<float>::lowest());
+    for (const glm::vec3& corner : corners) {
+        const glm::vec3 worldCorner = glm::vec3(modelMatrix * glm::vec4(corner, 1.0f));
+        outMin = glm::min(outMin, worldCorner);
+        outMax = glm::max(outMax, worldCorner);
+    }
+    return true;
+}
+
 } // namespace
 
 namespace Engine {
@@ -52,38 +91,93 @@ namespace Platform {
 namespace Render {
 namespace Passes {
 
-void CollectTransparentDrawItems(ECS::Registry& registry,
-                                 const glm::vec3& eyePosition,
-                                 std::vector<TransparentDrawItem>& outItems) {
+void SetupLitShaderCameraUniforms(RenderContext& context) {
+    if (!context.shader || !context.cameraSource) {
+        return;
+    }
+
+    context.shader->UseShader();
+    if (!context.shader->IsValid()) {
+        return;
+    }
+
+    const glm::mat4 view = context.cameraSource->GetViewMatrix();
+    const glm::vec3 eyePos = context.cameraSource->GetEyePosition();
+    const GLint uniformView = context.shader->GetViewLocation();
+    const GLint uniformProjection = context.shader->GetProjectionLocation();
+    const GLint uniformEyePosition = context.shader->GetEyePositionLocation();
+
+    if (uniformView != -1) {
+        glUniformMatrix4fv(uniformView, 1, GL_FALSE, glm::value_ptr(view));
+    }
+    if (uniformProjection != -1) {
+        glUniformMatrix4fv(uniformProjection, 1, GL_FALSE, glm::value_ptr(context.projection));
+    }
+    if (uniformEyePosition != -1) {
+        glUniform3f(uniformEyePosition, eyePos.x, eyePos.y, eyePos.z);
+    }
+}
+
+void CollectMeshDrawItems(ECS::Registry& registry,
+                          const RenderContext& context,
+                          bool transparentPass,
+                          std::vector<MeshDrawItem>& outItems) {
     outItems.clear();
+    if (!context.cameraSource) {
+        return;
+    }
+
+    const glm::vec3 eyePos = context.cameraSource->GetEyePosition();
+    const Frustum frustum =
+        context.frustumCullingEnabled ? ExtractFrustum(context.viewProjection) : Frustum{};
+
     auto entities = registry.View<Components::MeshComponent, Components::TransformComponent>();
     for (EntityID entityID : entities) {
         const auto* meshComp = registry.GetComponent<Components::MeshComponent>(entityID);
         const auto* transformComp = registry.GetComponent<Components::TransformComponent>(entityID);
         const auto* materialComp = registry.GetComponent<Components::MaterialComponent>(entityID);
+        const auto* lodComp = registry.GetComponent<Components::MeshLodComponent>(entityID);
         if (!meshComp || !transformComp || !meshComp->IsLoaded()) {
             continue;
         }
-        if (!PassesOpacityFilter(materialComp, true)) {
+        if (!PassesOpacityFilter(materialComp, transparentPass)) {
             continue;
         }
 
-        const glm::vec3 worldPos = glm::vec3(transformComp->GetMatrix() * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-        TransparentDrawItem item;
+        const float distanceSq = ComputeViewDistanceSq(*transformComp, eyePos);
+        const float viewDistance = std::sqrt(distanceSq);
+        Model* drawModel = SelectLodModel(*meshComp, lodComp, viewDistance);
+        if (drawModel == nullptr || drawModel->GetMeshCount() == 0) {
+            continue;
+        }
+
+        const glm::mat4 modelMatrix = transformComp->GetMatrix();
+        if (context.frustumCullingEnabled) {
+            glm::vec3 boundsMin;
+            glm::vec3 boundsMax;
+            ComputeWorldBounds(*drawModel, modelMatrix, boundsMin, boundsMax);
+            if (!IntersectsAABB(frustum, boundsMin, boundsMax)) {
+                continue;
+            }
+        }
+
+        MeshDrawItem item;
         item.entityID = entityID;
-        const glm::vec3 delta = worldPos - eyePosition;
-        item.distanceSq = glm::dot(delta, delta);
+        item.model = drawModel;
+        item.distanceSq = distanceSq;
         outItems.push_back(item);
     }
 
-    std::sort(outItems.begin(), outItems.end(), [](const TransparentDrawItem& a, const TransparentDrawItem& b) {
-        return a.distanceSq > b.distanceSq;
-    });
+    if (transparentPass) {
+        std::sort(outItems.begin(), outItems.end(), [](const MeshDrawItem& a, const MeshDrawItem& b) {
+            return a.distanceSq > b.distanceSq;
+        });
+    }
 }
 
-void DrawMeshEntities(RenderContext& context,
-                      const std::vector<EntityID>& entities,
-                      bool transparentPass) {
+void DrawMeshDrawItems(RenderContext& context,
+                       const std::vector<MeshDrawItem>& items,
+                       bool transparentPass) {
     if (!context.registry || !context.shader || !context.cameraSource) {
         return;
     }
@@ -106,14 +200,10 @@ void DrawMeshEntities(RenderContext& context,
         glDepthMask(GL_FALSE);
     }
 
-    for (EntityID entityID : entities) {
-        auto* meshComp = context.registry->GetComponent<Components::MeshComponent>(entityID);
-        auto* transformComp = context.registry->GetComponent<Components::TransformComponent>(entityID);
-        auto* materialComp = context.registry->GetComponent<Components::MaterialComponent>(entityID);
-        if (!meshComp || !transformComp || !meshComp->IsLoaded()) {
-            continue;
-        }
-        if (!PassesOpacityFilter(materialComp, transparentPass)) {
+    for (const MeshDrawItem& item : items) {
+        auto* transformComp = context.registry->GetComponent<Components::TransformComponent>(item.entityID);
+        auto* materialComp = context.registry->GetComponent<Components::MaterialComponent>(item.entityID);
+        if (!transformComp || item.model == nullptr) {
             continue;
         }
 
@@ -141,18 +231,75 @@ void DrawMeshEntities(RenderContext& context,
             glUniform1f(uniformMaterialOpacity, opacity);
         }
 
-        const auto* animComp = context.registry->GetComponent<Components::AnimationComponent>(entityID);
+        const auto* animComp = context.registry->GetComponent<Components::AnimationComponent>(item.entityID);
         UploadBoneUniforms(shaderProgramID, animComp ? animComp->skeleton : nullptr);
-
-        if (meshComp->model) {
-            meshComp->model->RenderModelPerMeshTexture(uniformUseTexture);
-        }
+        item.model->RenderModelPerMeshTexture(uniformUseTexture);
     }
 
     if (transparentPass) {
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
+}
+
+void CollectTransparentDrawItems(ECS::Registry& registry,
+                                 const glm::vec3& eyePosition,
+                                 std::vector<TransparentDrawItem>& outItems) {
+    outItems.clear();
+    RenderContext context;
+    context.cameraSource = nullptr;
+    context.frustumCullingEnabled = false;
+
+    std::vector<MeshDrawItem> items;
+    auto entities = registry.View<Components::MeshComponent, Components::TransformComponent>();
+    for (EntityID entityID : entities) {
+        const auto* meshComp = registry.GetComponent<Components::MeshComponent>(entityID);
+        const auto* transformComp = registry.GetComponent<Components::TransformComponent>(entityID);
+        const auto* materialComp = registry.GetComponent<Components::MaterialComponent>(entityID);
+        if (!meshComp || !transformComp || !meshComp->IsLoaded()) {
+            continue;
+        }
+        if (!PassesOpacityFilter(materialComp, true)) {
+            continue;
+        }
+        TransparentDrawItem item;
+        item.entityID = entityID;
+        item.distanceSq = ComputeViewDistanceSq(*transformComp, eyePosition);
+        outItems.push_back(item);
+    }
+
+    std::sort(outItems.begin(), outItems.end(), [](const TransparentDrawItem& a, const TransparentDrawItem& b) {
+        return a.distanceSq > b.distanceSq;
+    });
+}
+
+void DrawMeshEntities(RenderContext& context,
+                      const std::vector<EntityID>& entities,
+                      bool transparentPass) {
+    std::vector<MeshDrawItem> items;
+    items.reserve(entities.size());
+    for (EntityID entityID : entities) {
+        if (!context.registry) {
+            continue;
+        }
+        const auto* meshComp = context.registry->GetComponent<Components::MeshComponent>(entityID);
+        const auto* transformComp = context.registry->GetComponent<Components::TransformComponent>(entityID);
+        const auto* lodComp = context.registry->GetComponent<Components::MeshLodComponent>(entityID);
+        if (!meshComp || !transformComp) {
+            continue;
+        }
+        MeshDrawItem item;
+        item.entityID = entityID;
+        item.distanceSq = context.cameraSource
+                              ? ComputeViewDistanceSq(*transformComp, context.cameraSource->GetEyePosition())
+                              : 0.0f;
+        item.model = SelectLodModel(
+            *meshComp,
+            lodComp,
+            std::sqrt(item.distanceSq));
+        items.push_back(item);
+    }
+    DrawMeshDrawItems(context, items, transparentPass);
 }
 
 } // namespace Passes

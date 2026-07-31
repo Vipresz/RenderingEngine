@@ -1,6 +1,7 @@
 #include "network/NetClient.h"
 
 #include "Logger.h"
+#include "core/network/SecureSecret.h"
 #include "core/network/ReplicationTypes.h"
 
 #ifdef _WIN32
@@ -101,6 +102,9 @@ bool NetClient::Login(const std::string& displayName,
         const Engine::Net::NetPacket message =
             Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
 
+        // Use credentials only for this request; do not retain password bytes afterward.
+        Engine::Net::SecureZeroString(request.password);
+
         if (!SendPacket(message)) {
             return false;
         }
@@ -130,24 +134,89 @@ bool NetClient::Login(const std::string& displayName,
         const std::string redirectHost = m_pendingRedirectHost;
         const uint16_t redirectTcpPort = m_pendingRedirectTcpPort;
         const uint16_t redirectUdpPort = m_pendingRedirectUdpPort;
+        const std::string migrationToken = m_pendingMigrationToken;
+        const Engine::Net::UserId redirectPreferredUserId =
+            preferredUserId != Engine::Net::kInvalidUserId ? preferredUserId : m_userId;
         m_loginRedirectPending = false;
         m_pendingRedirectHost.clear();
         m_pendingRedirectTcpPort = 0;
         m_pendingRedirectUdpPort = 0;
+        m_pendingMigrationToken.clear();
 
-        Disconnect();
-        if (!Connect(redirectHost, redirectTcpPort)) {
-            LOG_ERROR_FMT("NetClient", "Failed to follow login redirect to %s:%u",
-                          redirectHost.c_str(),
-                          redirectTcpPort);
+        if (!FollowRedirect(redirectHost, redirectTcpPort, redirectUdpPort, redirectPreferredUserId, migrationToken)) {
             return false;
         }
-        m_udpPort = redirectUdpPort != 0 ? redirectUdpPort
-                                         : static_cast<uint16_t>(redirectTcpPort + 1);
     }
 
     LOG_ERROR("NetClient", "Login redirect hop limit exceeded");
     return false;
+}
+
+bool NetClient::FollowRedirect(const std::string& host,
+                               uint16_t tcpPort,
+                               uint16_t udpPort,
+                               Engine::Net::UserId preferredUserId,
+                               const std::string& migrationToken) {
+    const Engine::Net::UserId preservedUserId = m_userId;
+    const std::string displayName = m_lastLoginDisplayName;
+    Disconnect();
+    if (!Connect(host, tcpPort)) {
+        LOG_ERROR_FMT("NetClient", "Failed to follow redirect to %s:%u", host.c_str(), tcpPort);
+        return false;
+    }
+    m_udpPort = udpPort != 0 ? udpPort : static_cast<uint16_t>(tcpPort + 1);
+
+    Engine::Net::LoginRequestPayload request;
+    request.displayName = displayName.empty() ? "Player" : displayName;
+    request.preferredUserId = preferredUserId != Engine::Net::kInvalidUserId ? preferredUserId
+                                                                            : preservedUserId;
+    request.username = m_username;
+    request.password = m_password;
+    request.authToken = m_authToken;
+    request.migrationToken = migrationToken;
+    const Engine::Net::NetPacket message =
+        Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
+    Engine::Net::SecureZeroString(request.password);
+    if (!SendPacket(message)) {
+        return false;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+        Poll();
+        if (m_loggedIn) {
+            LOG_INFO_FMT("NetClient", "Redirect login succeeded as user %u", m_userId);
+            return true;
+        }
+        if (m_loginRejected) {
+            LOG_ERROR("NetClient", "Redirect login rejected by server");
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    LOG_ERROR("NetClient", "Redirect login timed out");
+    return false;
+}
+
+bool NetClient::ProcessPendingZoneTransfer() {
+    if (!m_zoneTransferPending.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    const std::string redirectHost = m_pendingRedirectHost;
+    const uint16_t redirectTcpPort = m_pendingRedirectTcpPort;
+    const uint16_t redirectUdpPort = m_pendingRedirectUdpPort;
+    const std::string migrationToken = m_pendingMigrationToken;
+    const Engine::Net::UserId preferredUserId = m_userId;
+
+    m_zoneTransferPending.store(false, std::memory_order_release);
+    m_pendingRedirectHost.clear();
+    m_pendingRedirectTcpPort = 0;
+    m_pendingRedirectUdpPort = 0;
+    m_pendingMigrationToken.clear();
+
+    return FollowRedirect(redirectHost, redirectTcpPort, redirectUdpPort, preferredUserId, migrationToken);
 }
 
 bool NetClient::RegisterUdpSession() {
@@ -173,6 +242,8 @@ void NetClient::Disconnect() {
     m_userId = Engine::Net::kInvalidUserId;
     m_udpSessionToken = 0;
     m_udpChannel.SetSessionToken(0);
+    m_udpChannel.SetEncryptPayloads(false);
+    Engine::Net::SecureZeroString(m_password);
 
     if (m_connection) {
         m_connection->Close();
@@ -254,6 +325,20 @@ bool NetClient::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snaps
         Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++));
 }
 
+bool NetClient::SendPing() {
+    if (!m_loggedIn) {
+        return false;
+    }
+
+    Engine::Net::PingPayload ping;
+    ping.sequence = ++m_pingSequence;
+    ping.sentTimestampMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count());
+    return SendPacket(Engine::Net::MakeMessage(
+        Engine::Net::MessageType::Ping, ping.Serialize(), m_sequence++));
+}
+
 void NetClient::Poll() {
     m_udpChannel.Poll();
     Engine::Net::NetPacket message;
@@ -291,11 +376,21 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
                 m_userId = response.assignedUserId;
                 m_udpSessionToken = response.udpSessionToken;
                 m_udpChannel.SetSessionToken(m_udpSessionToken);
+                Engine::Net::SecureZeroString(m_password);
+                if (!m_authToken.empty() && m_udpSessionToken != 0) {
+                    m_udpChannel.SetEncryptPayloads(true);
+                    m_udpChannel.SetAuthTokenForEncryption(m_authToken);
+                }
             } else if (response.redirect && !response.redirectHost.empty() && response.redirectTcpPort != 0) {
                 m_pendingRedirectHost = response.redirectHost;
                 m_pendingRedirectTcpPort = response.redirectTcpPort;
                 m_pendingRedirectUdpPort = response.redirectUdpPort;
-                m_loginRedirectPending = true;
+                m_pendingMigrationToken = response.migrationToken;
+                if (m_loggedIn) {
+                    m_zoneTransferPending.store(true, std::memory_order_release);
+                } else {
+                    m_loginRedirectPending = true;
+                }
                 LOG_INFO_FMT("NetClient",
                              "Login redirect to shard %u at %s:%u",
                              response.shardId,
@@ -319,6 +414,27 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (Engine::Net::PeerEventPayload::Deserialize(message.payload, event) && m_callbacks.onPeerLeft) {
                 m_callbacks.onPeerLeft(event.userId);
             }
+            break;
+        }
+        case Engine::Net::MessageType::ZoneTransfer: {
+            Engine::Net::ZoneTransferPayload transfer;
+            if (!Engine::Net::ZoneTransferPayload::Deserialize(message.payload, transfer)) {
+                break;
+            }
+            m_pendingRedirectHost = transfer.redirectHost;
+            m_pendingRedirectTcpPort = transfer.redirectTcpPort;
+            m_pendingRedirectUdpPort = transfer.redirectUdpPort;
+            m_pendingMigrationToken = transfer.migrationToken;
+            m_zoneTransferPending.store(true, std::memory_order_release);
+            if (m_callbacks.onZoneTransfer) {
+                m_callbacks.onZoneTransfer(transfer);
+            }
+            LOG_INFO_FMT("NetClient",
+                         "Zone transfer requested to shard %u at %s:%u (%s)",
+                         transfer.shardId,
+                         transfer.redirectHost.c_str(),
+                         transfer.redirectTcpPort,
+                         transfer.reason.c_str());
             break;
         }
         case Engine::Net::MessageType::TransformState: {
@@ -366,6 +482,21 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (Engine::Net::ComponentSnapshot::Deserialize(message.payload, snapshot) &&
                 m_callbacks.onComponentSnapshot) {
                 m_callbacks.onComponentSnapshot(snapshot);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::Pong: {
+            Engine::Net::PongPayload pong;
+            if (!Engine::Net::PongPayload::Deserialize(message.payload, pong)) {
+                break;
+            }
+            const uint64_t nowMs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count());
+            if (nowMs >= pong.sentTimestampMs) {
+                m_roundTripTimeMs.store(static_cast<float>(nowMs - pong.sentTimestampMs),
+                                        std::memory_order_relaxed);
             }
             break;
         }

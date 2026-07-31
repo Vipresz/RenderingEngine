@@ -57,6 +57,7 @@ public:
 
     Engine::Net::UserId GetLocalUserId() const;
     bool IsLoggedIn() const;
+    float GetRoundTripTimeMs() const;
 
     NetClient& GetClient() { return m_client; }
     const NetClient& GetClient() const { return m_client; }
@@ -71,6 +72,7 @@ public:
     void SetUseUdpForMovement(bool enabled) { m_client.SetUseUdpForMovement(enabled); }
     bool SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
     bool SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot);
+    void RequestWorldResync();
 
     // Shared mesh for remote players (e.g. male_model.obj). Scale matches local character.
     void SetRemotePlayerModel(Engine::Platform::Render::Model* model, float scale = 1.0f);
@@ -144,6 +146,10 @@ private:
         float airVelocityZ = 0.0f;
         float groundLevel = 0.0f;
         uint8_t animationState = 0; // MovementAnimationState
+        float currentAnimationTime = 0.0f;
+        float locomotionSpeed = 0.0f;
+        bool isLooping = true;
+        bool landingActive = false;
         bool initialized = false;
     };
 
@@ -196,6 +202,8 @@ private:
     uint64_t m_pendingMovementAckTick = 0;
     std::atomic<bool>* m_pendingMovementAckSignal = nullptr;
     std::mutex m_movementAckMutex;
+    float m_pingAccumulator = 0.0f;
+    float m_pingIntervalSeconds = 2.0f;
 };
 
 } // namespace Systems

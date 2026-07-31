@@ -38,3 +38,32 @@ TEST(NetworkSystemTest, DefersEntitySnapshotsUntilProcessNetworkFrame) {
     EXPECT_EQ(appliedCount, 1u);
     EXPECT_EQ(system.PendingEntitySnapshotCount(), 0u);
 }
+
+TEST(NetworkSystemTest, DefersComponentSnapshotsUntilProcessNetworkFrame) {
+    NetworkSystem system;
+    Registry localRegistry;
+
+    size_t appliedCount = 0;
+    system.SetComponentSnapshotHandler([&](const Engine::Net::ComponentSnapshot& /*snapshot*/) {
+        ++appliedCount;
+    });
+
+    Engine::Net::ComponentSnapshot snapshot;
+    snapshot.entityId = 7;
+    snapshot.componentId = Engine::Net::kTransformReplicationComponent;
+    system.StageComponentSnapshot(snapshot);
+
+    EXPECT_EQ(appliedCount, 0u);
+    EXPECT_EQ(system.PendingComponentSnapshotCount(), 1u);
+
+    system.ProcessNetworkFrame(1.0f / 60.0f, localRegistry, 1);
+    EXPECT_EQ(appliedCount, 1u);
+    EXPECT_EQ(system.PendingComponentSnapshotCount(), 0u);
+}
+
+TEST(NetworkSystemTest, GreedySendCanBeDisabled) {
+    NetworkSystem system;
+    system.SetGreedySend(false);
+    system.SetSendRateHz(20.0f);
+    EXPECT_FALSE(system.IsLoggedIn());
+}

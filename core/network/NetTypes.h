@@ -40,6 +40,12 @@ enum class MessageType : MessageTypeId {
 
     Ping = 30,
     Pong = 31,
+
+    ZoneTransfer = 50,
+    PopulationHeartbeat = 51,
+
+    UnreliableTransformBatch = 52,
+    PopulationQuery = 53,
 };
 
 inline const char* MessageTypeName(MessageType type) {
@@ -60,6 +66,10 @@ inline const char* MessageTypeName(MessageType type) {
         case MessageType::PeerLeft: return "PeerLeft";
         case MessageType::Ping: return "Ping";
         case MessageType::Pong: return "Pong";
+        case MessageType::ZoneTransfer: return "ZoneTransfer";
+        case MessageType::PopulationHeartbeat: return "PopulationHeartbeat";
+        case MessageType::UnreliableTransformBatch: return "UnreliableTransformBatch";
+        case MessageType::PopulationQuery: return "PopulationQuery";
         default: return "Invalid";
     }
 }

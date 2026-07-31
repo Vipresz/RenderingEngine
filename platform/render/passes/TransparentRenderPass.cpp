@@ -12,20 +12,15 @@ void TransparentRenderPass::Execute(RenderContext& context) {
         return;
     }
 
-    const glm::vec3 eyePos = context.cameraSource->GetEyePosition();
-    std::vector<TransparentDrawItem> transparentItems;
-    CollectTransparentDrawItems(*context.registry, eyePos, transparentItems);
+    SetupLitShaderCameraUniforms(context);
+
+    std::vector<MeshDrawItem> transparentItems;
+    CollectMeshDrawItems(*context.registry, context, true, transparentItems);
     if (transparentItems.empty()) {
         return;
     }
 
-    std::vector<EntityID> entityOrder;
-    entityOrder.reserve(transparentItems.size());
-    for (const TransparentDrawItem& item : transparentItems) {
-        entityOrder.push_back(item.entityID);
-    }
-
-    DrawMeshEntities(context, entityOrder, true);
+    DrawMeshDrawItems(context, transparentItems, true);
 }
 
 } // namespace Passes

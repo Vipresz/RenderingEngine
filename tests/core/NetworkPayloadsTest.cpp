@@ -61,6 +61,10 @@ TEST(NetworkPayloadsTest, TransformStateRoundTrip) {
     original.airVelocityZ = -0.5f;
     original.groundLevel = 1.0f;
     original.animationState = 3;
+    original.currentAnimationTime = 0.75f;
+    original.locomotionSpeed = 3.5f;
+    original.isLooping = false;
+    original.landingActive = true;
 
     TransformStatePayload decoded;
     ASSERT_TRUE(TransformStatePayload::Deserialize(original.Serialize(), decoded));
@@ -77,6 +81,30 @@ TEST(NetworkPayloadsTest, TransformStateRoundTrip) {
     EXPECT_FLOAT_EQ(decoded.airVelocityZ, -0.5f);
     EXPECT_FLOAT_EQ(decoded.groundLevel, 1.0f);
     EXPECT_EQ(decoded.animationState, 3u);
+    EXPECT_FLOAT_EQ(decoded.currentAnimationTime, 0.75f);
+    EXPECT_FLOAT_EQ(decoded.locomotionSpeed, 3.5f);
+    EXPECT_FALSE(decoded.isLooping);
+    EXPECT_TRUE(decoded.landingActive);
+}
+
+TEST(NetworkPayloadsTest, PingPongRoundTrip) {
+    Engine::Net::PingPayload ping;
+    ping.sequence = 99;
+    ping.sentTimestampMs = 123456789;
+
+    Engine::Net::PingPayload decodedPing;
+    ASSERT_TRUE(Engine::Net::PingPayload::Deserialize(ping.Serialize(), decodedPing));
+    EXPECT_EQ(decodedPing.sequence, 99u);
+    EXPECT_EQ(decodedPing.sentTimestampMs, 123456789u);
+
+    Engine::Net::PongPayload pong;
+    pong.sequence = decodedPing.sequence;
+    pong.sentTimestampMs = decodedPing.sentTimestampMs;
+    pong.serverTimestampMs = decodedPing.sentTimestampMs + 12;
+
+    Engine::Net::PongPayload decodedPong;
+    ASSERT_TRUE(Engine::Net::PongPayload::Deserialize(pong.Serialize(), decodedPong));
+    EXPECT_EQ(decodedPong.serverTimestampMs, decodedPing.sentTimestampMs + 12);
 }
 
 TEST(NetworkPayloadsTest, TransformStateLegacyPayloadWithoutJumpFields) {

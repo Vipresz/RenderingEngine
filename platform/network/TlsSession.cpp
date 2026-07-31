@@ -11,6 +11,9 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/error.h>
 #include <mbedtls/net_sockets.h>
+#include <psa/crypto.h>
+
+#include <mutex>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 
@@ -41,6 +44,11 @@ struct TlsSession::Impl {
 };
 
 namespace {
+
+void EnsurePsaCryptoInitialized() {
+    static std::once_flag initialized;
+    std::call_once(initialized, []() { psa_crypto_init(); });
+}
 
 int BioSend(void* ctx, const unsigned char* buf, size_t len) {
     auto* socketHandle = static_cast<uintptr_t*>(ctx);
@@ -86,6 +94,8 @@ bool TlsSession::InitializeClient(uintptr_t socketHandle, const TlsConfig& confi
         return false;
     }
 
+    EnsurePsaCryptoInitialized();
+
     m_impl = new Impl();
     mbedtls_ssl_init(&m_impl->ssl);
     mbedtls_ssl_config_init(&m_impl->conf);
@@ -126,6 +136,13 @@ bool TlsSession::InitializeClient(uintptr_t socketHandle, const TlsConfig& confi
         return false;
     }
 
+    if (!config.serverName.empty()) {
+        if (mbedtls_ssl_set_hostname(&m_impl->ssl, config.serverName.c_str()) != 0) {
+            Close();
+            return false;
+        }
+    }
+
     m_impl->socketHandle = socketHandle;
     mbedtls_ssl_set_bio(&m_impl->ssl, &m_impl->socketHandle, BioSend, BioRecv, nullptr);
     m_active = true;
@@ -137,6 +154,8 @@ bool TlsSession::InitializeServer(uintptr_t socketHandle, const TlsConfig& confi
     if (!config.enabled || config.certificatePath.empty() || config.privateKeyPath.empty()) {
         return false;
     }
+
+    EnsurePsaCryptoInitialized();
 
     m_impl = new Impl();
     mbedtls_ssl_init(&m_impl->ssl);
@@ -197,7 +216,9 @@ bool TlsSession::Handshake() {
     } while (result == MBEDTLS_ERR_SSL_WANT_READ || result == MBEDTLS_ERR_SSL_WANT_WRITE);
 
     if (result != 0) {
-        LOG_ERROR_FMT("TlsSession", "Handshake failed: -0x%x", -result);
+        char errorBuffer[256];
+        mbedtls_strerror(result, errorBuffer, sizeof(errorBuffer));
+        LOG_ERROR_FMT("TlsSession", "Handshake failed: -0x%x (%s)", -result, errorBuffer);
         Close();
         return false;
     }

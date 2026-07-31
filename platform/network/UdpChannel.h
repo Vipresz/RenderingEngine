@@ -22,6 +22,8 @@ struct UdpDatagramContext {
 
 using UnreliableTransformHandler =
     std::function<void(const Engine::Net::TransformStatePayload&, const UdpDatagramContext&)>;
+using UnreliableTransformBatchHandler =
+    std::function<void(const std::vector<Engine::Net::TransformStatePayload>&, const UdpDatagramContext&)>;
 using UdpSessionRegisterHandler =
     std::function<void(const Engine::Net::UdpSessionRegisterPayload&, const UdpDatagramContext&)>;
 using UdpMovementCommandHandler =
@@ -40,6 +42,9 @@ public:
 
     void SetUnreliableTransformHandler(UnreliableTransformHandler handler) {
         m_transformHandler = std::move(handler);
+    }
+    void SetUnreliableTransformBatchHandler(UnreliableTransformBatchHandler handler) {
+        m_transformBatchHandler = std::move(handler);
     }
     void SetUdpSessionRegisterHandler(UdpSessionRegisterHandler handler) {
         m_registerHandler = std::move(handler);
@@ -60,6 +65,12 @@ public:
     }
 
     void SetRequireAuthenticatedDatagrams(bool required) { m_requireAuthenticatedDatagrams = required; }
+
+    void SetEncryptPayloads(bool enabled) { m_encryptPayloads = enabled; }
+    bool EncryptsPayloads() const { return m_encryptPayloads; }
+    void SetAuthTokenForEncryption(std::string authToken) {
+        m_authTokenForEncryption = std::move(authToken);
+    }
 
     bool SendUnreliableTransform(const Engine::Net::TransformStatePayload& payload);
     bool SendMovementCommand(const Engine::Net::MovementCommand& command);
@@ -91,6 +102,7 @@ private:
 
     DatagramSocket m_socket;
     UnreliableTransformHandler m_transformHandler;
+    UnreliableTransformBatchHandler m_transformBatchHandler;
     UdpSessionRegisterHandler m_registerHandler;
     UdpMovementCommandHandler m_movementHandler;
     UdpMovementAckHandler m_movementAckHandler;
@@ -98,6 +110,8 @@ private:
     uint64_t m_sessionToken = 0;
     SessionTokenResolver m_sessionTokenResolver;
     bool m_requireAuthenticatedDatagrams = true;
+    bool m_encryptPayloads = false;
+    std::string m_authTokenForEncryption;
     std::string m_remoteHost;
     uint16_t m_remotePort = 0;
     bool m_connected = false;

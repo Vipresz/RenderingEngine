@@ -235,12 +235,18 @@ void main()
 	}
 
 	vec3 surfaceColor;
+	float texAlpha = 1.0;
 	if (useTexture != 0) {
-		vec3 texColor = texture(theTexture, TexCoord).rgb;
+		vec4 texSample = texture(theTexture, TexCoord);
 		vec3 vertColor = (length(vCol.rgb) > 0.01) ? vCol.rgb : vec3(0.7, 0.7, 0.7);
-		float texBrightness = dot(texColor, texColor);
-		float texWeight = smoothstep(0.001, 0.025, texBrightness);
-		surfaceColor = mix(vertColor, texColor, texWeight);
+		// Alpha marks a real texel. Unfilled atlas samples stay transparent; use the
+		// vertex color and keep the fragment opaque so black albedo is not discarded.
+		if (texSample.a < 0.5) {
+			surfaceColor = vertColor;
+		} else {
+			surfaceColor = texSample.rgb;
+			texAlpha = texSample.a;
+		}
 	} else if (length(vCol.rgb) > 0.01) {
 		surfaceColor = vCol.rgb;
 	} else {
@@ -248,7 +254,7 @@ void main()
 	}
 
 	vec4 lit = CalcDirectionalLight() + CalcPointLights() + CalcSpotLights();
-	float alpha = clamp(materialOpacity, 0.0, 1.0);
+	float alpha = clamp(materialOpacity * texAlpha, 0.0, 1.0);
 	colour = vec4(surfaceColor * lit.rgb, alpha);
 }
 

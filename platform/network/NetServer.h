@@ -4,6 +4,7 @@
 #include "core/network/NetworkPayloads.h"
 #include "core/network/ReplicationTypes.h"
 #include "core/network/CredentialStore.h"
+#include "core/network/ServerSecurityPolicy.h"
 #include "core/network/MovementCommand.h"
 #include "core/network/ShardConfig.h"
 #include "core/network/LayerInstancePolicy.h"
@@ -11,6 +12,7 @@
 #include "core/network/ReplicationTier.h"
 #include "core/network/ZoneScaleConfig.h"
 #include "network/InterestManager.h"
+#include "network/CellLayerAssigner.h"
 #include "network/RateLimiter.h"
 #include "network/TlsSession.h"
 #include "network/MessageQueue.h"
@@ -39,6 +41,7 @@ struct ConnectedClient {
     Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
     std::string displayName;
     uint64_t udpSessionToken = 0;
+    bool loggedIn = false;
     std::unique_ptr<NetworkConnection> connection;
 };
 
@@ -55,6 +58,10 @@ public:
 
     void SetRequiredAuthToken(std::string token) { m_requiredAuthToken = std::move(token); }
     const std::string& GetRequiredAuthToken() const { return m_requiredAuthToken; }
+
+    void SetSecurityPolicy(const Engine::Net::ServerSecurityPolicy& policy) { m_securityPolicy = policy; }
+    Engine::Net::ServerSecurityPolicy& GetSecurityPolicy() { return m_securityPolicy; }
+    const Engine::Net::ServerSecurityPolicy& GetSecurityPolicy() const { return m_securityPolicy; }
 
     Engine::Net::CredentialStore& GetCredentialStore() { return m_credentialStore; }
     const Engine::Net::CredentialStore& GetCredentialStore() const { return m_credentialStore; }
@@ -140,6 +147,12 @@ public:
     Engine::Net::LayerSplitPlan GetLayerSplitPlan() const;
     bool TryExecuteLayerSplit(const std::function<void(Engine::Net::UserId)>& onPlayerMigrated);
 
+    void SetReplicationTickNumber(uint64_t tickNumber);
+    uint64_t GetReplicationTickNumber() const;
+    CellLayerAssigner& GetCellLayerAssigner() { return m_cellLayerAssigner; }
+    const CellLayerAssigner& GetCellLayerAssigner() const { return m_cellLayerAssigner; }
+    void UpdateCellLayerForPlayer(Engine::Net::UserId userId, const glm::vec3& position);
+
 private:
     void IoLoop();
     size_t PollClients();
@@ -163,6 +176,8 @@ private:
 
     bool SendToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
     bool SendUdpTransformTo(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
+    bool SendUdpTransformBatchTo(Engine::Net::UserId userId,
+                                 const std::vector<Engine::Net::TransformStatePayload>& transforms);
     bool SendUdpPayloadTo(Engine::Net::UserId userId,
                             Engine::Net::MessageType type,
                             const Engine::Net::NetBuffer& payload);
@@ -193,6 +208,7 @@ private:
     Socket m_listenSocket;
     UdpChannel m_udpChannel;
     InterestManager m_interestManager;
+    CellLayerAssigner m_cellLayerAssigner;
     ServerAuthority m_authority;
     std::thread m_ioThread;
 
@@ -205,6 +221,7 @@ private:
     Engine::Net::UserId m_nextUserId = 1;
     std::atomic<uint64_t> m_sequence{1};
     std::string m_requiredAuthToken;
+    Engine::Net::ServerSecurityPolicy m_securityPolicy;
     Engine::Net::CredentialStore m_credentialStore;
     Engine::Net::ShardConfig m_shardConfig;
     Engine::Net::ScalePolicyConfig m_scalePolicy;
@@ -221,6 +238,7 @@ private:
     std::atomic<uint32_t> m_movementCommandsDropped{0};
     std::atomic<uint32_t> m_loginAttemptsDropped{0};
     std::atomic<uint32_t> m_overflowLayerPopulation{0};
+    std::atomic<uint64_t> m_replicationTickNumber{0};
 
     mutable std::mutex m_replicationQueueMutex;
     std::deque<PendingPeerTransform> m_pendingPeerTransforms;

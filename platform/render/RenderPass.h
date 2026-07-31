@@ -16,6 +16,9 @@ struct RenderContext {
     Shader* shader = nullptr;
     ICameraSource* cameraSource = nullptr;
     glm::mat4 projection{1.0f};
+    glm::mat4 view{1.0f};
+    glm::mat4 viewProjection{1.0f};
+    bool frustumCullingEnabled = true;
     float deltaTime = 0.0f;
     uint64_t tickNumber = 0;
     GLuint defaultWhiteTexture = 0;

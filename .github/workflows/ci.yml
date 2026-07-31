@@ -60,7 +60,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Configure Platform + TLS
+      - name: Configure Platform + TLS + Nuklear
         run: >
           cmake -B build-platform
           -DBUILD_ENGINE_EXAMPLES=OFF
@@ -68,6 +68,7 @@ jobs:
           -DBUILD_ENGINE_PLATFORM=ON
           -DENGINE_ENABLE_TLS=ON
           -DENGINE_ENABLE_AUDIO=ON
+          -DNUKLEAR_DIR=${{ github.workspace }}/third_party/nuklear
 
       - name: Build
         run: cmake --build build-platform --config Release --target EngineTests --parallel

@@ -1,6 +1,7 @@
 #include "network/UdpChannel.h"
 
 #include "Logger.h"
+#include "core/network/UdpDatagramCipher.h"
 #include "core/network/UdpMessageAuth.h"
 
 #include <cstring>
@@ -91,11 +92,28 @@ bool UdpChannel::SendPayloadTo(Engine::Net::MessageType type,
     header.type = static_cast<uint16_t>(type);
     header.sequence = m_sendSequence++;
 
+    Engine::Net::NetBuffer wirePayload = payload;
+    if (m_encryptPayloads && sessionTokenForAuth != 0 && !m_authTokenForEncryption.empty() &&
+        type != Engine::Net::MessageType::UdpSessionRegister) {
+        const Engine::Net::UdpCipherKey key =
+            Engine::Net::DeriveUdpCipherKey(sessionTokenForAuth, m_authTokenForEncryption);
+        std::vector<uint8_t> encrypted;
+        if (!Engine::Net::EncryptUdpPayload(key,
+                                            header.sequence,
+                                            payload.Data().data(),
+                                            payload.Data().size(),
+                                            encrypted)) {
+            return false;
+        }
+        wirePayload = Engine::Net::NetBuffer(std::move(encrypted));
+        header.version = Engine::Net::kUdpProtocolVersionEncrypted;
+    }
+
     const size_t payloadOffset = sizeof(UdpPacketHeader);
-    std::vector<uint8_t> packet(payloadOffset + payload.Size());
+    std::vector<uint8_t> packet(payloadOffset + wirePayload.Size());
     std::memcpy(packet.data(), &header, sizeof(UdpPacketHeader));
-    if (!payload.Data().empty()) {
-        std::memcpy(packet.data() + payloadOffset, payload.Data().data(), payload.Data().size());
+    if (!wirePayload.Data().empty()) {
+        std::memcpy(packet.data() + payloadOffset, wirePayload.Data().data(), wirePayload.Data().size());
     }
 
     if (sessionTokenForAuth != 0) {
@@ -104,7 +122,7 @@ bool UdpChannel::SendPayloadTo(Engine::Net::MessageType type,
             &header,
             offsetof(UdpPacketHeader, authTag),
             packet.data() + payloadOffset,
-            payload.Size());
+            wirePayload.Size());
         std::memcpy(packet.data(), &header, sizeof(UdpPacketHeader));
     }
 
@@ -153,24 +171,27 @@ void UdpChannel::HandleDatagram(const uint8_t* data,
     UdpPacketHeader header;
     std::memcpy(&header, data, sizeof(UdpPacketHeader));
     if (header.magic != Engine::Net::kUdpChannelMagic ||
-        header.version != Engine::Net::kProtocolVersion) {
+        (header.version != Engine::Net::kProtocolVersion &&
+         header.version != Engine::Net::kUdpProtocolVersionEncrypted)) {
         return;
     }
 
+    const UdpDatagramContext context{host, port};
     const size_t payloadOffset = sizeof(UdpPacketHeader);
     const size_t payloadSize = size - payloadOffset;
-    Engine::Net::NetBuffer payload(std::vector<uint8_t>(data + payloadOffset, data + payloadOffset + payloadSize));
+    std::vector<uint8_t> payloadBytes(data + payloadOffset, data + payloadOffset + payloadSize);
 
-    const UdpDatagramContext context{host, port};
+    const auto messageType = static_cast<Engine::Net::MessageType>(header.type);
+    Engine::Net::NetBuffer payload;
 
     uint64_t sessionToken = m_sessionToken;
     if (sessionToken == 0 && m_sessionTokenResolver) {
         sessionToken = m_sessionTokenResolver(context);
     }
-    if (sessionToken == 0 &&
-        static_cast<Engine::Net::MessageType>(header.type) == Engine::Net::MessageType::UdpSessionRegister) {
+    if (sessionToken == 0 && messageType == Engine::Net::MessageType::UdpSessionRegister) {
         Engine::Net::UdpSessionRegisterPayload registration;
-        if (Engine::Net::UdpSessionRegisterPayload::Deserialize(payload, registration)) {
+        Engine::Net::NetBuffer registerPayload{payloadBytes};
+        if (Engine::Net::UdpSessionRegisterPayload::Deserialize(registerPayload, registration)) {
             sessionToken = registration.sessionToken;
         }
     }
@@ -183,18 +204,49 @@ void UdpChannel::HandleDatagram(const uint8_t* data,
                                           header.authTag,
                                           &header,
                                           offsetof(UdpPacketHeader, authTag),
-                                          payload.Data().data(),
-                                          payload.Data().size())) {
+                                          payloadBytes.data(),
+                                          payloadBytes.size())) {
             LOG_WARNING("UdpChannel", "Rejected UDP datagram with invalid auth tag");
             return;
         }
     }
 
-    switch (static_cast<Engine::Net::MessageType>(header.type)) {
+    if (header.version == Engine::Net::kUdpProtocolVersionEncrypted) {
+        if (sessionToken == 0 || m_authTokenForEncryption.empty()) {
+            return;
+        }
+        const Engine::Net::UdpCipherKey key =
+            Engine::Net::DeriveUdpCipherKey(sessionToken, m_authTokenForEncryption);
+        std::vector<uint8_t> plaintext;
+        if (!Engine::Net::DecryptUdpPayload(key,
+                                            header.sequence,
+                                            payloadBytes.data(),
+                                            payloadBytes.size(),
+                                            plaintext)) {
+            LOG_WARNING("UdpChannel", "Rejected UDP datagram with invalid encryption tag");
+            return;
+        }
+        payload = Engine::Net::NetBuffer(std::move(plaintext));
+    } else {
+        payload = Engine::Net::NetBuffer(std::move(payloadBytes));
+    }
+
+    switch (messageType) {
         case Engine::Net::MessageType::UnreliableTransform: {
             Engine::Net::TransformStatePayload transform;
             if (Engine::Net::TransformStatePayload::Deserialize(payload, transform) && m_transformHandler) {
                 m_transformHandler(transform, context);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::UnreliableTransformBatch: {
+            Engine::Net::TransformBatchPayload batch;
+            if (Engine::Net::TransformBatchPayload::Deserialize(payload, batch) && m_transformBatchHandler) {
+                m_transformBatchHandler(batch.transforms, context);
+            } else if (Engine::Net::TransformBatchPayload::Deserialize(payload, batch) && m_transformHandler) {
+                for (const Engine::Net::TransformStatePayload& transform : batch.transforms) {
+                    m_transformHandler(transform, context);
+                }
             }
             break;
         }
