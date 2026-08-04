@@ -14,6 +14,16 @@
 #include <chrono>
 #include <thread>
 
+namespace {
+
+#if defined(ENGINE_LOW_COST_PBKDF2)
+constexpr std::chrono::seconds kLoginWaitTimeout{30};
+#else
+constexpr std::chrono::seconds kLoginWaitTimeout{5};
+#endif
+
+} // namespace
+
 namespace Engine {
 namespace Platform {
 namespace Networking {
@@ -110,7 +120,7 @@ bool NetClient::Login(const std::string& displayName,
         }
 
         const auto start = std::chrono::steady_clock::now();
-        while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+        while (std::chrono::steady_clock::now() - start < kLoginWaitTimeout) {
             Poll();
             if (m_loggedIn) {
                 LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
@@ -182,7 +192,7 @@ bool NetClient::FollowRedirect(const std::string& host,
     }
 
     const auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+    while (std::chrono::steady_clock::now() - start < kLoginWaitTimeout) {
         Poll();
         if (m_loggedIn) {
             LOG_INFO_FMT("NetClient", "Redirect login succeeded as user %u", m_userId);

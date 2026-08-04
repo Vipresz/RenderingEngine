@@ -77,6 +77,7 @@ target_include_directories(EngineTestSupport PUBLIC
 )
 target_link_libraries(EngineTestSupport PUBLIC Engine glm::glm)
 target_compile_features(EngineTestSupport PUBLIC cxx_std_17)
+target_compile_definitions(EngineTestSupport PUBLIC ENGINE_LOW_COST_PBKDF2)
 
 if(WIN32)
     target_link_libraries(EngineTestSupport PUBLIC ws2_32 winmm)

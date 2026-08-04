@@ -14,7 +14,12 @@ struct PasswordHashRecord {
 
 class PasswordHasher {
 public:
+#if defined(ENGINE_LOW_COST_PBKDF2)
+    // Test builds only: keep credential login fast under OpenCppCoverage/CI.
+    static constexpr uint32_t kDefaultIterations = 1000;
+#else
     static constexpr uint32_t kDefaultIterations = 120000;
+#endif
 
     static PasswordHashRecord HashPassword(const std::string& password,
                                            const std::vector<uint8_t>& salt = {},
