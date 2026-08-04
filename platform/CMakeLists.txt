@@ -528,6 +528,11 @@ if(NOT ASSIMP_FOUND_LOCAL)
     message(WARNING "Assimp not found - model loading will not be available")
 endif()
 
+# Expose GLEW runtime path for test executables (gtest discovery runs EngineTests.exe).
+if(WIN32 AND DEFINED GLEW_DLL_DIR AND EXISTS "${GLEW_DLL_DIR}/glew32.dll")
+    set(ENGINE_GLEW_RUNTIME_DLL "${GLEW_DLL_DIR}/glew32.dll" PARENT_SCOPE)
+endif()
+
 # Platform-specific libraries
 if(WIN32)
     target_link_libraries(Platform PUBLIC winmm ws2_32)

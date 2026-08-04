@@ -217,10 +217,44 @@ if(BUILD_ENGINE_PLATFORM)
             COMMENT "Copying TLS fixtures for EngineTests"
         )
     endif()
+
+    if(WIN32)
+        # Platform tests link GLFW/GLEW dynamically; copy runtime DLLs beside EngineTests.exe so
+        # gtest discovery and ctest can launch the binary on Windows CI runners.
+        if(TARGET glfw)
+            add_custom_command(TARGET EngineTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:glfw>"
+                    "$<TARGET_FILE_DIR:EngineTests>"
+                COMMENT "Copying GLFW DLL for EngineTests")
+        endif()
+        if(DEFINED ENGINE_GLEW_RUNTIME_DLL AND EXISTS "${ENGINE_GLEW_RUNTIME_DLL}")
+            add_custom_command(TARGET EngineTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ENGINE_GLEW_RUNTIME_DLL}"
+                    "$<TARGET_FILE_DIR:EngineTests>"
+                COMMENT "Copying GLEW DLL for EngineTests")
+        endif()
+        if(TARGET assimp)
+            get_target_property(_engine_assimp_type assimp TYPE)
+            if(_engine_assimp_type STREQUAL "SHARED_LIBRARY")
+                add_custom_command(TARGET EngineTests POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<TARGET_FILE:assimp>"
+                        "$<TARGET_FILE_DIR:EngineTests>"
+                    COMMENT "Copying Assimp DLL for EngineTests")
+            endif()
+        endif()
+    endif()
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(EngineTests DISCOVERY_MODE PRE_TEST)
+if(BUILD_ENGINE_PLATFORM)
+    # Discover at build time after runtime DLLs are copied (PRE_TEST fails with 0xc0000135 on CI).
+    gtest_discover_tests(EngineTests DISCOVERY_MODE POST_BUILD)
+else()
+    gtest_discover_tests(EngineTests DISCOVERY_MODE PRE_TEST)
+endif()
 
 # Fallback so `ctest` always has at least one entry if discovery is stale on MSVC.
 add_test(NAME EngineTests COMMAND EngineTests)
