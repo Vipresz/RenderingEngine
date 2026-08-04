@@ -23,6 +23,7 @@ constexpr ReplicationComponentId kAnimationReplicationComponent = 2;
 constexpr ReplicationComponentId kLoadoutReplicationComponent = 3;
 constexpr ReplicationComponentId kItemOwnershipReplicationComponent = 4;
 constexpr ReplicationComponentId kTradeReplicationComponent = 5;
+constexpr ReplicationComponentId kVitalsReplicationComponent = 6;
 
 // Per-component replicated state blob.
 struct ComponentSnapshot {

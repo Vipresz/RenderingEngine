@@ -5,6 +5,7 @@
 #include "core/network/LoadoutReplication.h"
 #include "core/network/InventoryAction.h"
 #include "core/network/ItemOwnershipReplication.h"
+#include "core/network/VitalsReplication.h"
 #include "core/network/ChatMessage.h"
 #include "core/network/MovementCommand.h"
 #include "core/network/ItemCombineRecipe.h"
@@ -122,6 +123,7 @@ private:
         Engine::Net::ReplicatedLoadout loadout;
         Engine::Net::ReplicatedItemOwnership ownership;
         Engine::Net::ReplicatedPlayerTrade trade;
+        Engine::Net::ReplicatedVitals vitals;
         uint64_t lastProcessedTick = 0;
         bool snapshotDirty = false;
         float snapshotAccumulator = 0.0f;
@@ -200,6 +202,7 @@ private:
     void RegisterLoadoutBinding();
     void RegisterOwnershipBinding();
     void RegisterTradeBinding();
+    void RegisterVitalsBinding();
     void ApplyTradeCommand(Engine::Net::UserId userId, Engine::Net::TradeCommand command);
     void ApplyChatMessage(Engine::Net::UserId userId, Engine::Net::ChatCommand command);
     void SyncTradeStateForSession(const Engine::Net::TradeSession& session);

@@ -31,6 +31,7 @@ AuthoritativeGameSimulator::AuthoritativeGameSimulator(NetServer& server) : m_se
     RegisterLoadoutBinding();
     RegisterOwnershipBinding();
     RegisterTradeBinding();
+    RegisterVitalsBinding();
     RegisterWorldDropBinding();
     m_replication.SetSnapshotSendHandler([this](const Engine::Net::EntitySnapshot& snapshot) {
         Engine::Net::NetPacket packet = Engine::Net::MakeMessage(
@@ -96,6 +97,31 @@ void AuthoritativeGameSimulator::RegisterOwnershipBinding() {
                 return false;
             }
             out = playerIt->second.ownership.Serialize();
+            return true;
+        },
+        [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
+            return true;
+        }});
+}
+
+void AuthoritativeGameSimulator::RegisterVitalsBinding() {
+    Engine::Net::ReplicationComponentDescriptor vitalsDesc;
+    vitalsDesc.id = Engine::Net::kVitalsReplicationComponent;
+    vitalsDesc.name = "Vitals";
+    m_replication.GetRegistry().Register(std::move(vitalsDesc));
+
+    m_replication.RegisterComponentBinding(Systems::ReplicationComponentBinding{
+        Engine::Net::kVitalsReplicationComponent,
+        [this](EntityID entity, ECS::Registry& /*registry*/, Engine::Net::NetBuffer& out) {
+            const auto userIt = m_entityToUser.find(entity);
+            if (userIt == m_entityToUser.end()) {
+                return false;
+            }
+            const auto playerIt = m_players.find(userIt->second);
+            if (playerIt == m_players.end() || playerIt->second.vitals.maxHealth <= 0.0f) {
+                return false;
+            }
+            out = playerIt->second.vitals.Serialize();
             return true;
         },
         [](EntityID /*entity*/, ECS::Registry& /*registry*/, const Engine::Net::NetBuffer& /*in*/) {
@@ -318,6 +344,10 @@ void AuthoritativeGameSimulator::SpawnPlayer(Engine::Net::UserId userId, const s
     player.entity = entity.id;
     player.displayName = displayName;
     player.ownership.ownerUserId = userId;
+    player.vitals.currentHealth = 100.0f;
+    player.vitals.maxHealth = 100.0f;
+    player.vitals.currentMana = 100.0f;
+    player.vitals.maxMana = 100.0f;
     player.movement.position = spawnPosition;
     player.movement.groundLevel = spawnPosition.y;
     if (m_terrainSampler) {

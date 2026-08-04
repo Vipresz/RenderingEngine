@@ -38,9 +38,7 @@ void ApplyRemoteAnimationFromPlayback(AnimationComponent& anim,
                                       float airVelocityZ,
                                       float groundLevel,
                                       uint8_t animationState,
-                                      float currentAnimationTime,
                                       float locomotionSpeed,
-                                      bool isLooping,
                                       bool landingActive) {
     anim.isJumping = isJumping;
     anim.jumpAnimationActive = jumpAnimationActive;
@@ -48,14 +46,31 @@ void ApplyRemoteAnimationFromPlayback(AnimationComponent& anim,
     anim.airVelocityX = airVelocityX;
     anim.airVelocityZ = airVelocityZ;
     anim.groundLevel = groundLevel;
-    anim.locomotionSpeed = locomotionSpeed > 0.0f
-                               ? locomotionSpeed
-                               : std::sqrt(airVelocityX * airVelocityX + airVelocityZ * airVelocityZ);
-    anim.currentAnimationTime = currentAnimationTime;
-    anim.isLooping = isLooping;
     anim.landingActive = landingActive;
 
-    switch (static_cast<Engine::Net::MovementAnimationState>(animationState)) {
+    Engine::Net::MovementAnimationState movementState =
+        static_cast<Engine::Net::MovementAnimationState>(animationState);
+    if (locomotionSpeed > 0.0f) {
+        anim.locomotionSpeed = locomotionSpeed;
+    } else {
+        const float planarSpeed =
+            std::sqrt(airVelocityX * airVelocityX + airVelocityZ * airVelocityZ);
+        if (planarSpeed > 0.05f) {
+            anim.locomotionSpeed = planarSpeed;
+        } else if (movementState == Engine::Net::MovementAnimationState::Running) {
+            anim.locomotionSpeed = anim.runAnimReferenceSpeed > 0.01f
+                                       ? anim.runAnimReferenceSpeed
+                                       : 5.25f;
+        } else if (movementState == Engine::Net::MovementAnimationState::Walking) {
+            anim.locomotionSpeed = anim.walkAnimReferenceSpeed > 0.01f
+                                       ? anim.walkAnimReferenceSpeed
+                                       : 2.8f;
+        } else {
+            anim.locomotionSpeed = 0.0f;
+        }
+    }
+
+    switch (movementState) {
         case Engine::Net::MovementAnimationState::Walking:
             anim.currentState = AnimationComponent::AnimationState::Walking;
             break;
@@ -617,9 +632,7 @@ void NetworkSystem::InterpolateRemoteTransforms(float deltaTime, ECS::Registry& 
                                          state.airVelocityZ,
                                          state.groundLevel,
                                          state.animationState,
-                                         state.currentAnimationTime,
                                          state.locomotionSpeed,
-                                         state.isLooping,
                                          state.landingActive);
     }
 }
