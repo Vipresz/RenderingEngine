@@ -133,17 +133,17 @@ set(ENGINE_TEST_SOURCES
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
     render/RaycastTest.cpp
-    render/FrustumTest.cpp
-    render/RenderLodSelectionTest.cpp
-    render/AssetManagerTest.cpp
-    render/ModelRaycastWorldTest.cpp
     render/ShadowShaderFilesTest.cpp
     ui/UILayerTest.cpp
 )
 
 if(BUILD_ENGINE_PLATFORM)
     list(APPEND ENGINE_TEST_SOURCES
+        render/FrustumTest.cpp
         render/ModelRaycastTest.cpp
+        render/RenderLodSelectionTest.cpp
+        render/AssetManagerTest.cpp
+        render/ModelRaycastWorldTest.cpp
         render/RenderPipelinePassTest.cpp
         network/NetworkSystemTest.cpp
         network/NetworkSystemIntegrationTest.cpp
