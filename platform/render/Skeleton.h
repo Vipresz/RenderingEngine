@@ -6,6 +6,7 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <functional>
 
 namespace Engine {
 namespace Platform {
@@ -45,6 +46,12 @@ public:
     // Update bone transforms from animation (node-local keyed by name).
     // Missing keys fall back to bind-pose local transforms from the FBX hierarchy.
     void UpdateBoneTransforms(const std::map<std::string, glm::mat4>& animationTransforms);
+
+    // Merge two keyed pose maps. Overlay keys replace primary when predicate returns true.
+    void UpdateBoneTransformsLayered(
+        const std::map<std::string, glm::mat4>& primaryTransforms,
+        const std::map<std::string, glm::mat4>& overlayTransforms,
+        const std::function<bool(const std::string& nodeName)>& useOverlayForNode);
 
     // Skip GPU skinning (boneCount=0). Mesh verts stay in authored bind pose.
     void ResetToBindPose();

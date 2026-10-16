@@ -66,6 +66,13 @@ struct AnimationComponent {
     // Travel speed each clip was authored to represent at 1x playback.
     float walkAnimReferenceSpeed = 2.5f;
     float runAnimReferenceSpeed = 5.0f;
+
+    // Combat skill overlay (upper body by default; full body when skillFullBody is true).
+    bool skillActive = false;
+    bool skillFullBody = false;
+    Animation* skillAnimation = nullptr;
+    float skillAnimationTime = 0.0f;
+    float skillDurationSeconds = 1.0f;
 };
 
 } // namespace Components

@@ -6,6 +6,8 @@
 #include <cmath>
 #include <algorithm>
 #include <map>
+#include <cctype>
+#include <string>
 
 namespace Engine {
 namespace Platform {
@@ -75,6 +77,43 @@ float ResolvePlaybackRate(const Components::AnimationComponent& animComp,
         return 1.0f;
     }
     return ResolveLocomotionPlaybackRate(animComp, clipDurationSeconds);
+}
+
+bool IsUpperBodyNodeName(const std::string& nodeName) {
+    std::string lower;
+    lower.reserve(nodeName.size());
+    for (char c : nodeName) {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (lower.find("upleg") != std::string::npos || lower.find("foot") != std::string::npos ||
+        lower.find("toe") != std::string::npos) {
+        return false;
+    }
+    if (lower.find("leg") != std::string::npos && lower.find("fore") == std::string::npos) {
+        return false;
+    }
+    if (lower.find("hips") != std::string::npos && lower.find("spine") == std::string::npos) {
+        return false;
+    }
+
+    return lower.find("spine") != std::string::npos || lower.find("neck") != std::string::npos ||
+           lower.find("head") != std::string::npos || lower.find("arm") != std::string::npos ||
+           lower.find("hand") != std::string::npos || lower.find("shoulder") != std::string::npos ||
+           lower.find("chest") != std::string::npos;
+}
+
+float SkillPlaybackRate(const Animation* clip, float desiredDurationSeconds) {
+    if (!clip || !clip->IsLoaded() || desiredDurationSeconds <= 0.01f) {
+        return 1.0f;
+    }
+    const float ticksPerSecond = clip->GetTicksPerSecond();
+    const float durationTicks = clip->GetDuration();
+    if (ticksPerSecond <= 0.0f || durationTicks <= 0.0f) {
+        return 1.0f;
+    }
+    const float clipDurationSeconds = durationTicks / ticksPerSecond;
+    return clipDurationSeconds / desiredDurationSeconds;
 }
 
 } // namespace
@@ -275,9 +314,41 @@ void AnimationSystem::UpdateAnimationPlayback(float deltaTime, ECS::Registry& re
             }
 
             const float timeInTicks = animComp->currentAnimationTime * ticksPerSecond;
-            std::map<std::string, glm::mat4> animationTransforms;
-            animComp->currentAnimation->GetBoneTransforms(timeInTicks, animationTransforms);
-            animComp->skeleton->UpdateBoneTransforms(animationTransforms);
+            std::map<std::string, glm::mat4> locomotionTransforms;
+            animComp->currentAnimation->GetBoneTransforms(timeInTicks, locomotionTransforms);
+
+            if (animComp->skillActive && animComp->skillAnimation &&
+                animComp->skillAnimation->IsLoaded()) {
+                const float skillTicksPerSecond = animComp->skillAnimation->GetTicksPerSecond();
+                const float skillDurationTicks = animComp->skillAnimation->GetDuration();
+                if (skillTicksPerSecond > 0.0f && skillDurationTicks > 0.0f) {
+                    const float skillRate =
+                        SkillPlaybackRate(animComp->skillAnimation, animComp->skillDurationSeconds);
+                    animComp->skillAnimationTime += deltaTime * skillRate;
+                    const float skillDurationSeconds = skillDurationTicks / skillTicksPerSecond;
+                    if (skillDurationSeconds > 0.0f &&
+                        animComp->skillAnimationTime > skillDurationSeconds) {
+                        animComp->skillAnimationTime = skillDurationSeconds;
+                    }
+
+                    const float skillTimeInTicks = animComp->skillAnimationTime * skillTicksPerSecond;
+                    std::map<std::string, glm::mat4> skillTransforms;
+                    animComp->skillAnimation->GetBoneTransforms(skillTimeInTicks, skillTransforms);
+
+                    if (animComp->skillFullBody) {
+                        animComp->skeleton->UpdateBoneTransforms(skillTransforms);
+                    } else {
+                        animComp->skeleton->UpdateBoneTransformsLayered(
+                            locomotionTransforms,
+                            skillTransforms,
+                            [](const std::string& nodeName) { return IsUpperBodyNodeName(nodeName); });
+                    }
+                } else {
+                    animComp->skeleton->UpdateBoneTransforms(locomotionTransforms);
+                }
+            } else {
+                animComp->skeleton->UpdateBoneTransforms(locomotionTransforms);
+            }
         } else if (animComp->skeleton && animComp->skeleton->IsLoaded()) {
             animComp->skeleton->ResetToBindPose();
         }

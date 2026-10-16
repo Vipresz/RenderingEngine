@@ -298,6 +298,29 @@ void Skeleton::UpdateBoneTransforms(const std::map<std::string, glm::mat4>& anim
     ApplyNodeHierarchy(m_hierarchyRootName, glm::mat4(1.0f), animationTransforms);
 }
 
+void Skeleton::UpdateBoneTransformsLayered(
+    const std::map<std::string, glm::mat4>& primaryTransforms,
+    const std::map<std::string, glm::mat4>& overlayTransforms,
+    const std::function<bool(const std::string& nodeName)>& useOverlayForNode) {
+    if (!m_loaded || primaryTransforms.empty() || m_hierarchyRootName.empty()) {
+        ResetToBindPose();
+        return;
+    }
+
+    std::map<std::string, glm::mat4> merged = primaryTransforms;
+    if (overlayTransforms.empty() || !useOverlayForNode) {
+        UpdateBoneTransforms(merged);
+        return;
+    }
+
+    for (const auto& entry : overlayTransforms) {
+        if (useOverlayForNode(entry.first)) {
+            merged[entry.first] = entry.second;
+        }
+    }
+    UpdateBoneTransforms(merged);
+}
+
 void Skeleton::GetFinalBoneMatrices(std::vector<glm::mat4>& boneMatrices) const {
     if (!m_loaded) {
         return;
