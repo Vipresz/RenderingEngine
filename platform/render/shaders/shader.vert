@@ -36,17 +36,25 @@ void main()
 		mat4 boneTransform = mat4(0.0);
 		
 		// Blend bone influences (up to 4 bones per vertex)
-		if (boneIDs.x >= 0 && boneIDs.x < MAX_BONES) {
+		float totalWeight = 0.0;
+		if (boneIDs.x >= 0 && boneIDs.x < MAX_BONES && boneWeights.x > 0.0) {
 			boneTransform += boneTransforms[boneIDs.x] * boneWeights.x;
+			totalWeight += boneWeights.x;
 		}
-		if (boneIDs.y >= 0 && boneIDs.y < MAX_BONES) {
+		if (boneIDs.y >= 0 && boneIDs.y < MAX_BONES && boneWeights.y > 0.0) {
 			boneTransform += boneTransforms[boneIDs.y] * boneWeights.y;
+			totalWeight += boneWeights.y;
 		}
-		if (boneIDs.z >= 0 && boneIDs.z < MAX_BONES) {
+		if (boneIDs.z >= 0 && boneIDs.z < MAX_BONES && boneWeights.z > 0.0) {
 			boneTransform += boneTransforms[boneIDs.z] * boneWeights.z;
+			totalWeight += boneWeights.z;
 		}
-		if (boneIDs.w >= 0 && boneIDs.w < MAX_BONES) {
+		if (boneIDs.w >= 0 && boneIDs.w < MAX_BONES && boneWeights.w > 0.0) {
 			boneTransform += boneTransforms[boneIDs.w] * boneWeights.w;
+			totalWeight += boneWeights.w;
+		}
+		if (totalWeight <= 0.0) {
+			boneTransform = mat4(1.0);
 		}
 		
 		// Apply bone transformation to vertex position and normal

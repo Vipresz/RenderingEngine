@@ -1,5 +1,6 @@
 #include "render/Model.h"
 #include "render/MeshAssetResolve.h"
+#include "render/Skeleton.h"
 #include "render/Raycast.h"
 #include "Logger.h"
 #include "stb_image.h"
@@ -114,14 +115,17 @@ void Model::LoadModel(const std::string& fileName) {
     }
 
     Assimp::Importer importer;
+    // OBJ and these FBX files store v = 0 at the bottom of the image. Texture upload
+    // flips stb's top-row-first pixels to match that, and SampleDiffuse does the same.
+    // aiProcess_FlipUVs would invert v a second time and put the diffuse map upside down.
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
     const aiScene* scene = importer.ReadFile(
         pathToRead,
         aiProcess_Triangulate |
-        aiProcess_FlipUVs |
         aiProcess_GenSmoothNormals |
         aiProcess_JoinIdenticalVertices |
-        aiProcess_LimitBoneWeights
+        aiProcess_LimitBoneWeights |
+        aiProcess_ImproveCacheLocality
     );
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
@@ -154,6 +158,15 @@ bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePa
     m_maxX = m_maxY = m_maxZ = std::numeric_limits<float>::lowest();
     m_boundsCalculated = false;
 
+    m_skipMeshesWithoutBones = false;
+    for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi) {
+        if (scene->mMeshes[mi]->HasBones()) {
+            m_skipMeshesWithoutBones = true;
+            break;
+        }
+    }
+    m_skinnedMeshBoneNames.clear();
+
     LoadNode(scene->mRootNode, scene);
     LoadMaterials(scene);
 
@@ -162,7 +175,7 @@ bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePa
         return false;
     }
 
-    CalculateBounds(scene);
+    RecalculateBoundsFromLoadedMeshes();
     LOG_INFO_FMT("Model", "Model loaded: %zu meshes, height: %.2f", m_meshList.size(), GetHeight());
     return true;
 }
@@ -180,6 +193,11 @@ void Model::LoadNode(aiNode* node, const aiScene* scene) {
 }
 
 void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
+    if (m_skipMeshesWithoutBones && !mesh->HasBones()) {
+        LOG_INFO_FMT("Model", "Skipping non-skinned mesh (%u verts) — skinned mesh present", mesh->mNumVertices);
+        return;
+    }
+
     std::vector<GLfloat> vertices;
     std::vector<unsigned int> indices;
     
@@ -187,8 +205,15 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
     std::vector<GLint> boneIDs;      // Bone IDs per vertex (up to 4 per vertex)
     std::vector<GLfloat> boneWeights; // Bone weights per vertex (up to 4 per vertex)
     bool hasBones = mesh->HasBones();
-    
+    SkinnedMeshBoneNames skinnedBoneNames;
     if (hasBones) {
+        skinnedBoneNames.meshIndex = m_meshList.size();
+        skinnedBoneNames.vertexCount = mesh->mNumVertices;
+        skinnedBoneNames.names.resize(mesh->mNumBones);
+        for (unsigned int i = 0; i < mesh->mNumBones; i++) {
+            skinnedBoneNames.names[i] = std::string(mesh->mBones[i]->mName.C_Str());
+        }
+
         LOG_INFO_FMT("Model", "Extracting bone data: %u bones, %u vertices", mesh->mNumBones, mesh->mNumVertices);
         boneIDs.resize(mesh->mNumVertices * 4, 0);
         boneWeights.resize(mesh->mNumVertices * 4, 0.0f);
@@ -211,9 +236,11 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
             
             for (unsigned int weightIdx = 0; weightIdx < bone->mNumWeights; weightIdx++) {
                 const aiVertexWeight& weight = bone->mWeights[weightIdx];
-                unsigned int vertexID = weight.mVertexId;
-                if (vertexID >= mesh->mNumVertices) continue; // Safety: skip invalid vertex refs
-                float vertexWeight = weight.mWeight;
+                const unsigned int vertexID = weight.mVertexId;
+                if (vertexID >= mesh->mNumVertices) {
+                    continue;
+                }
+                const float vertexWeight = weight.mWeight;
                 
                 for (int slot = 0; slot < 4; slot++) {
                     if (boneWeights[vertexID * 4 + slot] == 0.0f) {
@@ -245,12 +272,16 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
             vertices.insert(vertices.end(), { 0.0f, 0.0f });
         }
         
-        // Normals (flipped for OpenGL coordinate system)
-        vertices.insert(vertices.end(), {
-            -mesh->mNormals[i].x,
-            -mesh->mNormals[i].y,
-            -mesh->mNormals[i].z
-        });
+        // Normals (flipped for OpenGL coordinate system); Assimp may omit normals on helper meshes.
+        if (mesh->HasNormals()) {
+            vertices.insert(vertices.end(), {
+                -mesh->mNormals[i].x,
+                -mesh->mNormals[i].y,
+                -mesh->mNormals[i].z
+            });
+        } else {
+            vertices.insert(vertices.end(), { 0.0f, 1.0f, 0.0f });
+        }
     }
     
     // Load indices
@@ -272,6 +303,16 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
         ));
     }
     m_vertexPositions.push_back(meshPositions);
+    std::vector<glm::vec2> meshTexcoords;
+    meshTexcoords.reserve(mesh->mNumVertices);
+    for (size_t i = 0; i < mesh->mNumVertices; i++) {
+        if (mesh->mTextureCoords[0]) {
+            meshTexcoords.emplace_back(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y);
+        } else {
+            meshTexcoords.emplace_back(0.f, 0.f);
+        }
+    }
+    m_vertexTexcoords.push_back(std::move(meshTexcoords));
     
     // Create mesh with bone data if available
     // numOfVertices = vertex count (vertices has 8 floats per vertex)
@@ -292,6 +333,10 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
                              static_cast<unsigned int>(indices.size()));
     m_meshList.push_back(newMesh);
     m_meshToTex.push_back(mesh->mMaterialIndex);
+    if (hasBones && !skinnedBoneNames.names.empty()) {
+        skinnedBoneNames.meshIndex = m_meshList.size() - 1;
+        m_skinnedMeshBoneNames.push_back(std::move(skinnedBoneNames));
+    }
 }
 
 void Model::LoadMaterials(const aiScene* scene) {
@@ -350,6 +395,9 @@ void Model::LoadMaterials(const aiScene* scene) {
                 return false;
             }
             m_textureList[i] = t;
+            if (m_diffuseTexturePath.empty()) {
+                m_diffuseTexturePath = texturePath;
+            }
             return true;
         };
 
@@ -674,11 +722,17 @@ void Model::ClearModel() {
     
     // Clear bone names
     m_boneNames.clear();
+    m_skinnedMeshBoneNames.clear();
+    m_skipMeshesWithoutBones = false;
     
     // Clear vertex positions
     m_vertexPositions.clear();
-    
-    // Clear heightmap data
+    m_vertexTexcoords.clear();
+    m_diffuseTexturePath.clear();
+    m_diffuseRgba.clear();
+    m_diffuseW = 0;
+    m_diffuseH = 0;
+
     m_heightGrid.clear();
     m_heightGridW = m_heightGridH = 0;
     m_terrainSizeX = m_terrainSizeZ = m_terrainHeightScale = 0.0f;
@@ -1023,6 +1077,148 @@ void Model::CreateSphere(float radius, unsigned int segments) {
     m_boundsCalculated = true;
 }
 
+void Model::RecalculateBoundsFromLoadedMeshes() {
+    m_minX = m_minY = m_minZ = std::numeric_limits<float>::max();
+    m_maxX = m_maxY = m_maxZ = std::numeric_limits<float>::lowest();
+
+    for (const auto& positions : m_vertexPositions) {
+        for (const glm::vec3& p : positions) {
+            m_minX = std::min(m_minX, p.x);
+            m_maxX = std::max(m_maxX, p.x);
+            m_minY = std::min(m_minY, p.y);
+            m_maxY = std::max(m_maxY, p.y);
+            m_minZ = std::min(m_minZ, p.z);
+            m_maxZ = std::max(m_maxZ, p.z);
+        }
+    }
+    m_boundsCalculated = !m_vertexPositions.empty();
+}
+
+void Model::CopyBindPoseTexcoords(std::vector<glm::vec2>& out) const {
+    out.clear();
+    size_t n = 0;
+    for (const auto& mesh : m_vertexTexcoords) {
+        n += mesh.size();
+    }
+    out.reserve(n);
+    for (const auto& mesh : m_vertexTexcoords) {
+        out.insert(out.end(), mesh.begin(), mesh.end());
+    }
+}
+
+bool Model::EnsureDiffusePixels() const {
+    if (!m_diffuseRgba.empty() && m_diffuseW > 0 && m_diffuseH > 0) {
+        return true;
+    }
+    if (m_diffuseTexturePath.empty()) {
+        return false;
+    }
+    int channels = 0;
+    unsigned char* pixels = stbi_load(m_diffuseTexturePath.c_str(), &m_diffuseW, &m_diffuseH, &channels, 4);
+    if (!pixels || m_diffuseW <= 0 || m_diffuseH <= 0) {
+        if (pixels) {
+            stbi_image_free(pixels);
+        }
+        m_diffuseW = 0;
+        m_diffuseH = 0;
+        m_diffuseRgba.clear();
+        return false;
+    }
+    const size_t count = static_cast<size_t>(m_diffuseW) * static_cast<size_t>(m_diffuseH) * 4u;
+    m_diffuseRgba.assign(pixels, pixels + count);
+    stbi_image_free(pixels);
+    return true;
+}
+
+bool Model::SampleDiffuse(float u, float v, glm::vec3& rgb) const {
+    if (!EnsureDiffusePixels()) {
+        return false;
+    }
+    u = u - std::floor(u);
+    v = v - std::floor(v);
+    const int x = std::clamp(static_cast<int>(std::lround(u * static_cast<float>(m_diffuseW - 1))), 0, m_diffuseW - 1);
+    const int y = std::clamp(static_cast<int>(std::lround((1.f - v) * static_cast<float>(m_diffuseH - 1))), 0,
+                             m_diffuseH - 1);
+    const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(m_diffuseW) + static_cast<size_t>(x)) * 4u;
+    rgb = glm::vec3(m_diffuseRgba[i], m_diffuseRgba[i + 1u], m_diffuseRgba[i + 2u]) / 255.f;
+    return true;
+}
+
+void Model::CopyBindPosePositions(std::vector<glm::vec3>& out) const {
+    out.clear();
+    size_t n = 0;
+    for (const auto& mesh : m_vertexPositions) {
+        n += mesh.size();
+    }
+    out.reserve(n);
+    for (const auto& mesh : m_vertexPositions) {
+        out.insert(out.end(), mesh.begin(), mesh.end());
+    }
+}
+
+void Model::CopySkinnedPositions(const std::vector<glm::mat4>& boneMatrices, std::vector<glm::vec3>& out) const {
+    out.clear();
+    const size_t nMesh = std::min(m_meshList.size(), m_vertexPositions.size());
+    size_t n = 0;
+    for (size_t mi = 0; mi < nMesh; ++mi) {
+        n += m_vertexPositions[mi].size();
+    }
+    out.reserve(n);
+    const int nBones = static_cast<int>(boneMatrices.size());
+    for (size_t mi = 0; mi < nMesh; ++mi) {
+        const std::vector<glm::vec3>& pos = m_vertexPositions[mi];
+        const Mesh* mesh = m_meshList[mi];
+        const bool skin = mesh != nullptr && mesh->HasBoneData() && nBones > 0 &&
+                          mesh->BoneIDs().size() >= pos.size() * 4u &&
+                          mesh->BoneWeights().size() >= pos.size() * 4u;
+        if (!skin) {
+            out.insert(out.end(), pos.begin(), pos.end());
+            continue;
+        }
+        const std::vector<GLint>& ids = mesh->BoneIDs();
+        const std::vector<GLfloat>& wts = mesh->BoneWeights();
+        for (size_t v = 0; v < pos.size(); ++v) {
+            glm::vec4 sk(0.f);
+            float wsum = 0.f;
+            for (int s = 0; s < 4; ++s) {
+                const size_t slot = v * 4u + static_cast<size_t>(s);
+                const float w = wts[slot];
+                const int id = static_cast<int>(ids[slot]);
+                if (w <= 1e-8f || id < 0 || id >= nBones) {
+                    continue;
+                }
+                sk += w * (boneMatrices[static_cast<size_t>(id)] * glm::vec4(pos[v], 1.f));
+                wsum += w;
+            }
+            if (wsum > 1e-6f) {
+                sk /= wsum;
+            } else {
+                sk = glm::vec4(pos[v], 1.f);
+            }
+            out.emplace_back(sk);
+        }
+    }
+}
+
+void Model::RemapBoneIndicesToSkeleton(const Skeleton& skeleton) {
+    for (const SkinnedMeshBoneNames& info : m_skinnedMeshBoneNames) {
+        if (info.meshIndex >= m_meshList.size() || info.names.empty()) {
+            continue;
+        }
+        Mesh* mesh = m_meshList[info.meshIndex];
+        if (!mesh || !mesh->HasBoneData()) {
+            continue;
+        }
+
+        std::vector<GLint> remapped(info.names.size(), 0);
+        for (size_t localIdx = 0; localIdx < info.names.size(); ++localIdx) {
+            const Bone* bone = skeleton.GetBone(info.names[localIdx]);
+            remapped[localIdx] = bone ? static_cast<GLint>(bone->id) : 0;
+        }
+        mesh->RemapBoneIndices(remapped.data(), info.vertexCount);
+    }
+}
+
 void Model::CalculateBounds(const aiScene* scene) {
     // Reset bounds
     m_minX = m_minY = m_minZ = std::numeric_limits<float>::max();
@@ -1160,15 +1356,16 @@ void Model::UpdateVertexPositions(std::vector<std::vector<GLfloat>>& vertexData,
     }
 }
 
-void Model::ApplyRainbowColors(float minZ, float maxZ) {
+void Model::ApplyRainbowColors(float minVal, float maxVal, int axis) {
     if (m_meshList.empty() || m_vertexPositions.size() != m_meshList.size()) {
         return;
     }
     
-    float zRange = maxZ - minZ;
+    float zRange = maxVal - minVal;
     if (zRange < 0.0001f) {
         zRange = 1.0f;
     }
+    const int ax = std::clamp(axis, 0, 2);
     
     for (size_t i = 0; i < m_meshList.size() && i < m_vertexPositions.size(); i++) {
         if (!m_meshList[i]) continue;
@@ -1181,7 +1378,8 @@ void Model::ApplyRainbowColors(float minZ, float maxZ) {
         colors.reserve(vertexPositions.size() * 3);
         
         for (const glm::vec3& pos : vertexPositions) {
-            float normalizedZ = (pos.z - minZ) / zRange;
+            const float component = pos[ax];
+            float normalizedZ = (component - minVal) / zRange;
             normalizedZ = std::max(0.0f, std::min(1.0f, normalizedZ));
             // Invert normalizedZ so colors match the point cloud mesh orientation
             normalizedZ = 1.0f - normalizedZ;

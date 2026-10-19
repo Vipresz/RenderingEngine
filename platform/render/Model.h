@@ -17,6 +17,8 @@ namespace Engine {
 namespace Platform {
 namespace Render {
 
+class Skeleton;
+
 class Model {
 public:
     Model();
@@ -93,6 +95,9 @@ public:
     
     // Get the number of bones in the model (max mesh bone index + 1)
     size_t GetBoneCount() const { return m_boneNames.size(); }
+
+    /// Remap mesh-local Assimp bone indices to skeleton bone IDs (call after skeleton load).
+    void RemapBoneIndicesToSkeleton(const Skeleton& skeleton);
     
     // Update vertex positions for animation (applies to all meshes)
     // vertexData: array of vertex data (position, UV, normal) per mesh
@@ -100,10 +105,21 @@ public:
     void UpdateVertexPositions(std::vector<std::vector<GLfloat>>& vertexData, 
                                const std::vector<unsigned int>& meshVertexCounts);
     
-    // Apply rainbow color gradient based on Z position
-    // minZ, maxZ: Z range across all objects (calculated externally)
-    void ApplyRainbowColors(float minZ, float maxZ);
+    // Apply rainbow color gradient along a mesh-local axis (0=X, 1=Y, 2=Z).
+    // FBX bind pose is Y-up, so height must use axis 1 or the mesh looks flat.
+    void ApplyRainbowColors(float minVal, float maxVal, int axis = 2);
     
+    /// Bind-pose / rest vertices in mesh space (before the scene model matrix).
+    void CopyBindPosePositions(std::vector<glm::vec3>& out) const;
+    /// Texture coordinates in the same vertex order as CopyBindPosePositions.
+    void CopyBindPoseTexcoords(std::vector<glm::vec2>& out) const;
+    /// Bind-pose vertices skinned by \p boneMatrices (same order as the skeleton upload).
+    void CopySkinnedPositions(const std::vector<glm::mat4>& boneMatrices, std::vector<glm::vec3>& out) const;
+    /// Resolved diffuse image, empty when the material has no file texture.
+    const std::string& DiffuseTexturePath() const { return m_diffuseTexturePath; }
+    /// Sample the diffuse image. u and v repeat. v = 0 is the bottom of the image.
+    bool SampleDiffuse(float u, float v, glm::vec3& rgb) const;
+
     // Check if model has any valid (non-null) textures
     bool HasTextures() const { 
         for (const auto* tex : m_textureList) {
@@ -139,7 +155,23 @@ private:
     
     // Store vertex positions for color application
     std::vector<std::vector<glm::vec3>> m_vertexPositions; // Per-mesh vertex positions
+    std::vector<std::vector<glm::vec2>> m_vertexTexcoords;
+    std::string m_diffuseTexturePath;
+    mutable std::vector<unsigned char> m_diffuseRgba;
+    mutable int m_diffuseW = 0;
+    mutable int m_diffuseH = 0;
+    bool EnsureDiffusePixels() const;
+
+    struct SkinnedMeshBoneNames {
+        size_t meshIndex = 0;
+        unsigned int vertexCount = 0;
+        std::vector<std::string> names; // mesh bone index → bone name
+    };
+    std::vector<SkinnedMeshBoneNames> m_skinnedMeshBoneNames;
+    bool m_skipMeshesWithoutBones = false;
     
+    void RecalculateBoundsFromLoadedMeshes();
+
     // Heightmap terrain data (for GetHeightAt sampling)
     std::vector<float> m_heightGrid;
     int m_heightGridW = 0, m_heightGridH = 0;
@@ -153,7 +185,7 @@ private:
                       float& outDistance) const;
     bool RaycastHeightmap(const glm::vec3& localOrigin, const glm::vec3& localDir, float maxDistance,
                           float& outDistance) const;
-    
+
     void CalculateBounds(const aiScene* scene);
 };
 

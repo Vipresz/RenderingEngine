@@ -4,7 +4,28 @@
 #include "stb_image.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <vector>
+
+namespace {
+
+// stb returns the top row first. OpenGL t=0 is the bottom, which is also OBJ v=0.
+void FlipImageVertical(unsigned char* data, int width, int height, int channels) {
+    if (data == nullptr || width <= 0 || height <= 1 || channels <= 0) {
+        return;
+    }
+    const int stride = width * channels;
+    std::vector<unsigned char> row(static_cast<size_t>(stride));
+    for (int y = 0; y < height / 2; ++y) {
+        unsigned char* top = data + static_cast<size_t>(y) * static_cast<size_t>(stride);
+        unsigned char* bottom = data + static_cast<size_t>(height - 1 - y) * static_cast<size_t>(stride);
+        std::memcpy(row.data(), top, static_cast<size_t>(stride));
+        std::memcpy(top, bottom, static_cast<size_t>(stride));
+        std::memcpy(bottom, row.data(), static_cast<size_t>(stride));
+    }
+}
+
+}
 
 namespace Engine {
 namespace Platform {
@@ -120,6 +141,7 @@ bool Texture::LoadTexture() {
         return false;
     }
     bitDepth = 3;
+    FlipImageVertical(texData, width, height, bitDepth);
 
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
@@ -148,6 +170,7 @@ bool Texture::LoadTextureA() {
         return false;
     }
     bitDepth = 4;
+    FlipImageVertical(texData, width, height, bitDepth);
 
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
@@ -183,6 +206,7 @@ bool Texture::LoadFromMemory(const unsigned char* buffer, int len) {
         return false;
     }
     bitDepth = (channelsInFile == 4) ? 4 : 3;
+    FlipImageVertical(texData, width, height, bitDepth);
 
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);

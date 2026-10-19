@@ -1,6 +1,8 @@
 #include "render/Mesh.h"
 #include "Logger.h"
 #include <GL/glew.h>
+#include <algorithm>
+#include <vector>
 
 namespace Engine {
 namespace Platform {
@@ -103,7 +105,32 @@ void Mesh::CreateMeshWithBones(GLfloat* vertices, unsigned int* indices,
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
-    
+
+    m_boneVertexCount = numOfVerticesWithBones;
+    m_boneIDs.assign(boneIDs, boneIDs + numOfVerticesWithBones * 4);
+    m_boneWeights.assign(boneWeights, boneWeights + numOfVerticesWithBones * 4);
+}
+
+void Mesh::RemapBoneIndices(const GLint* remappedIds, unsigned int vertexCount) {
+    if (!m_hasBoneData || remappedIds == nullptr || vertexCount == 0 || m_boneIDs.empty()) {
+        return;
+    }
+    const unsigned int count = std::min(vertexCount, m_boneVertexCount);
+    for (unsigned int v = 0; v < count; ++v) {
+        for (int slot = 0; slot < 4; ++slot) {
+            const unsigned int idx = v * 4 + static_cast<unsigned int>(slot);
+            const GLint localId = m_boneIDs[idx];
+            if (localId >= 0) {
+                m_boneIDs[idx] = remappedIds[static_cast<unsigned int>(localId)];
+            }
+        }
+    }
+    if (m_boneIDVBO != 0) {
+        glBindBuffer(GL_ARRAY_BUFFER, m_boneIDVBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        sizeof(GLint) * m_boneIDs.size(), m_boneIDs.data());
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
 }
 
 void Mesh::UpdateVertexPositions(GLfloat* vertices, unsigned int numOfVertices) {
@@ -196,6 +223,8 @@ void Mesh::ClearMesh() {
     indexCount = 0;
     m_hasBoneData = false;
     m_hasColorData = false;
+    m_boneVertexCount = 0;
+    m_boneIDs.clear();
 }
 
 Mesh::~Mesh() {
