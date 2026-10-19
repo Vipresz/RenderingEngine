@@ -32,7 +32,10 @@ protected:
     UISystem ui;
 
     void SetUp() override {
-        ASSERT_EQ(window.Initialize(), 0);
+        // GitHub-hosted Windows runners have no OpenGL driver. Skip instead of failing the job.
+        if (window.Initialize() != 0) {
+            GTEST_SKIP() << "OpenGL context unavailable";
+        }
         ASSERT_TRUE(ui.Initialize(&window, Engine::Platform::UI::MenuStyle::Astral()));
         g_drawOrder.clear();
     }

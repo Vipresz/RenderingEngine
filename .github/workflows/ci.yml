@@ -16,7 +16,9 @@ concurrency:
 
 jobs:
   test-windows:
-    runs-on: windows-latest
+    # Vipresz org runner on this PC (DESKTOP-HF590QG-vipresz). It has a GPU;
+    # GitHub-hosted windows-latest does not.
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -52,7 +54,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure -j 1 --label-exclude aggregate
 
   test-platform-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -77,14 +79,35 @@ jobs:
         run: ctest --test-dir build-platform -C Release --output-on-failure --label-exclude aggregate
 
   coverage-windows:
-    runs-on: windows-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install OpenCppCoverage
-        run: choco install opencppcoverage -y
+        shell: powershell
+        run: |
+          $dest = Join-Path $env:TEMP "OpenCppCoverageSetup.exe"
+          $url = "https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-0.9.9.0/OpenCppCoverageSetup-x64-0.9.9.0.exe"
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 4; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+              $downloaded = $true
+              break
+            } catch {
+              Write-Host "Download attempt $attempt failed: $_"
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          if (-not $downloaded) {
+            throw "Failed to download OpenCppCoverage from $url"
+          }
+          $proc = Start-Process -FilePath $dest -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) {
+            throw "OpenCppCoverage installer exited with $($proc.ExitCode)"
+          }
 
       - name: Configure
         run: cmake -B build-cov -DCMAKE_BUILD_TYPE=Debug -DBUILD_ENGINE_EXAMPLES=OFF -DBUILD_ENGINE_TESTS=ON -DBUILD_ENGINE_PLATFORM=OFF
@@ -93,7 +116,7 @@ jobs:
         run: cmake --build build-cov --config Debug --target EngineTests
 
       - name: Coverage gate (60%)
-        shell: pwsh
+        shell: powershell
         run: |
           $occ = "${env:ProgramFiles}\OpenCppCoverage\OpenCppCoverage.exe"
           if (-not (Test-Path $occ)) {
