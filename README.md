@@ -55,3 +55,7 @@ cmake --build . --config Release
 ```
 
 See `examples/BasicExample.cpp` for a complete example.
+
+## Gear 360
+
+[Samsung Gear 360](https://github.com/Vipresz/SamsungGear360) is a live viewer for the camera's dual-fisheye stream. A Raspberry Pi relay brings the camera onto the local network, and the C++ and Python players can show the raw fisheye, a rectilinear view, or a draggable 360 view. Lens calibration can stitch the two lenses into one panorama.
