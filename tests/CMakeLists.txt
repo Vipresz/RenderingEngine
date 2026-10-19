@@ -138,6 +138,11 @@ set(ENGINE_TEST_SOURCES
     ui/UILayerTest.cpp
 )
 
+# Suites in this list already run in the platform-off CI jobs. The platform job
+# skips them and runs only the sources appended below, plus TLS cases that are
+# compiled only when ENGINE_ENABLE_TLS is on.
+set(ENGINE_CORE_TEST_SOURCES ${ENGINE_TEST_SOURCES})
+
 if(BUILD_ENGINE_PLATFORM)
     list(APPEND ENGINE_TEST_SOURCES
         render/FrustumTest.cpp
@@ -248,10 +253,50 @@ if(BUILD_ENGINE_PLATFORM)
     endif()
 endif()
 
+# gtest filter for suites the core CI jobs already execute. TlsSessionTest's
+# certificate cases are inside ENGINE_ENABLE_TLS, so only the always-on case is
+# listed here; the rest stay on the platform run.
+function(engine_core_gtest_filter out_var)
+    set(suites "")
+    foreach(src IN LISTS ENGINE_CORE_TEST_SOURCES)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${src}" contents)
+        string(REGEX MATCHALL "(TEST|TEST_F|TEST_P)\\([ \t\r\n]*[A-Za-z_][A-Za-z0-9_]*" hits "${contents}")
+        foreach(hit IN LISTS hits)
+            string(REGEX REPLACE "^[A-Z_]+\\([ \t\r\n]*" "" suite "${hit}")
+            if(suite STREQUAL "TlsSessionTest")
+                continue()
+            endif()
+            list(APPEND suites "${suite}")
+        endforeach()
+    endforeach()
+    if(NOT suites)
+        message(FATAL_ERROR "Failed to collect core gtest suite names")
+    endif()
+    list(REMOVE_DUPLICATES suites)
+    set(patterns "")
+    foreach(suite IN LISTS suites)
+        list(APPEND patterns "${suite}.*")
+    endforeach()
+    list(APPEND patterns "TlsSessionTest.DisabledConfigDoesNotInitialize")
+    list(JOIN patterns ":" joined)
+    set(${out_var} "${joined}" PARENT_SCOPE)
+endfunction()
+
 include(GoogleTest)
 if(BUILD_ENGINE_PLATFORM)
+    engine_core_gtest_filter(_engine_core_gtest_filter)
     # Discover at build time after runtime DLLs are copied (PRE_TEST fails with 0xc0000135 on CI).
-    gtest_discover_tests(EngineTests DISCOVERY_MODE POST_BUILD)
+    # Split labels so test-platform-windows can run -L platform and skip the core suite.
+    gtest_discover_tests(EngineTests
+        DISCOVERY_MODE POST_BUILD
+        TEST_FILTER "${_engine_core_gtest_filter}"
+        TEST_LIST EngineCoreTests
+        PROPERTIES LABELS "core")
+    gtest_discover_tests(EngineTests
+        DISCOVERY_MODE POST_BUILD
+        TEST_FILTER "-${_engine_core_gtest_filter}"
+        TEST_LIST EnginePlatformTests
+        PROPERTIES LABELS "platform")
 else()
     gtest_discover_tests(EngineTests DISCOVERY_MODE PRE_TEST)
 endif()

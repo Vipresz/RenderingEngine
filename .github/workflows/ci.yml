@@ -2,6 +2,9 @@ name: RenderingEngine CI
 
 # Essential engine CI for this repo. AstralWorlds does not re-run these tests;
 # it only builds game/server (see AstralWorlds .github/workflows/ci.yml + cd.yml).
+# test-windows and test-linux run the core suite. test-platform-windows runs
+# only tests labeled platform (OpenGL, Nuklear, and TLS-on cases). coverage-windows
+# executes the core suite again because the coverage gate needs that run.
 
 on:
   push:
@@ -76,7 +79,8 @@ jobs:
         run: cmake --build build-platform --config Release --target EngineTests --parallel
 
       - name: Test
-        run: ctest --test-dir build-platform -C Release --output-on-failure --label-exclude aggregate
+        # Core suites already ran in test-windows. -L platform keeps OpenGL, Nuklear, and TLS-on cases.
+        run: ctest --test-dir build-platform -C Release --output-on-failure -L platform --label-exclude aggregate --no-tests=error
 
   coverage-windows:
     runs-on: [self-hosted, Windows, X64]
