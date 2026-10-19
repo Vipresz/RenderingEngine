@@ -900,6 +900,14 @@ void NetServer::IoLoop() {
         Socket clientSocket;
         while (m_listenSocket.Accept(clientSocket)) {
             didWork = true;
+            // Accepted sockets stay blocking on Windows. A blocking recv in the shared
+            // I/O loop holds the login packet until the next datagram arrives, so the
+            // client waits forever for LoginResponse.
+            if (!clientSocket.SetNonBlocking(true)) {
+                clientSocket.Close();
+                clientSocket = Socket();
+                continue;
+            }
             const Engine::Net::UserId userId = m_nextUserId++;
             auto client = std::make_unique<ConnectedClient>();
             client->userId = userId;
