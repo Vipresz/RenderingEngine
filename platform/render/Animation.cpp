@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <iterator>
 
 namespace Engine {
 namespace Platform {
@@ -199,11 +200,11 @@ void Animation::LoadAnimationChannels(const aiAnimation* animation) {
 }
 
 void Animation::GetBoneTransforms(float timeInTicks, std::map<std::string, glm::mat4>& boneTransforms) const {
+    boneTransforms.clear();
     if (!m_loaded) {
         return;
     }
-    
-    // Loop through all channels and get interpolated transforms
+
     for (const auto& pair : m_channels) {
         const AnimationChannel& channel = pair.second;
         
@@ -213,40 +214,28 @@ void Animation::GetBoneTransforms(float timeInTicks, std::map<std::string, glm::
     }
 }
 
-// AnimationChannel implementation
-int AnimationChannel::FindPositionIndex(float animationTime) const {
-    for (size_t i = 0; i < positionTimestamps.size() - 1; i++) {
-        if (animationTime < positionTimestamps[i + 1]) {
-            return static_cast<int>(i);
-        }
+namespace {
+
+/// Last key with time <= \p animationTime. Keys are authored in increasing order.
+int FindKeyframeIndex(const std::vector<float>& timestamps, float animationTime) {
+    if (timestamps.size() < 2) {
+        return 0;
     }
-    return static_cast<int>(positionTimestamps.size() - 1);
+    const auto it = std::upper_bound(timestamps.begin(), timestamps.end(), animationTime);
+    if (it == timestamps.begin()) {
+        return 0;
+    }
+    return static_cast<int>(std::distance(timestamps.begin(), it) - 1);
 }
 
-int AnimationChannel::FindRotationIndex(float animationTime) const {
-    for (size_t i = 0; i < rotationTimestamps.size() - 1; i++) {
-        if (animationTime < rotationTimestamps[i + 1]) {
-            return static_cast<int>(i);
-        }
-    }
-    return static_cast<int>(rotationTimestamps.size() - 1);
-}
-
-int AnimationChannel::FindScalingIndex(float animationTime) const {
-    for (size_t i = 0; i < scaleTimestamps.size() - 1; i++) {
-        if (animationTime < scaleTimestamps[i + 1]) {
-            return static_cast<int>(i);
-        }
-    }
-    return static_cast<int>(scaleTimestamps.size() - 1);
-}
+} // namespace
 
 glm::vec3 AnimationChannel::InterpolatePosition(float animationTime) const {
     if (positions.size() == 1) {
         return positions[0];
     }
     
-    int p0Index = FindPositionIndex(animationTime);
+    int p0Index = FindKeyframeIndex(positionTimestamps, animationTime);
     int p1Index = p0Index + 1;
     
     if (p1Index >= static_cast<int>(positions.size())) {
@@ -268,7 +257,7 @@ glm::quat AnimationChannel::InterpolateRotation(float animationTime) const {
         return rotations[0];
     }
     
-    int p0Index = FindRotationIndex(animationTime);
+    int p0Index = FindKeyframeIndex(rotationTimestamps, animationTime);
     int p1Index = p0Index + 1;
     
     if (p1Index >= static_cast<int>(rotations.size())) {
@@ -290,7 +279,7 @@ glm::vec3 AnimationChannel::InterpolateScale(float animationTime) const {
         return scales[0];
     }
     
-    int p0Index = FindScalingIndex(animationTime);
+    int p0Index = FindKeyframeIndex(scaleTimestamps, animationTime);
     int p1Index = p0Index + 1;
     
     if (p1Index >= static_cast<int>(scales.size())) {

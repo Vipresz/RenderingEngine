@@ -28,10 +28,6 @@ struct AnimationChannel {
     glm::mat4 GetTransform(float animationTime, const glm::mat4& defaultTransform) const;
     
 private:
-    int FindPositionIndex(float animationTime) const;
-    int FindRotationIndex(float animationTime) const;
-    int FindScalingIndex(float animationTime) const;
-    
     glm::vec3 InterpolatePosition(float animationTime) const;
     glm::quat InterpolateRotation(float animationTime) const;
     glm::vec3 InterpolateScale(float animationTime) const;
@@ -56,7 +52,8 @@ public:
     // Get ticks per second (animation speed)
     float GetTicksPerSecond() const { return m_ticksPerSecond; }
     
-    // Get bone transforms at a given time (in ticks)
+    /// Replace \p boneTransforms with node-local matrices at \p timeInTicks.
+    /// Time is in clip ticks. Looping and one-shot holds are the caller's job.
     void GetBoneTransforms(float timeInTicks, std::map<std::string, glm::mat4>& boneTransforms) const;
     
     // Get all animation channel names (bone names)

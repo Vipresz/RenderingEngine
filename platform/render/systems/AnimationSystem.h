@@ -4,12 +4,18 @@
 #include "core/ecs/Registry.h"
 #include "render/components/AnimationComponent.h"
 
+#include <glm/mat4x4.hpp>
+#include <map>
+#include <string>
+
 namespace Engine {
 namespace Platform {
 namespace Render {
 namespace Systems {
 
-// Animation system - updates animation playback and prepares bone transforms
+/// Advances clip time and writes each skeleton's bone palette.
+/// Walk and run playback tracks locomotion speed. Jump, landing, and skills are one-shot.
+/// A skill replaces upper-body channels, or the whole pose when skillFullBody is set.
 class AnimationSystem : public ECS::ISystem {
 public:
     AnimationSystem();
@@ -20,6 +26,9 @@ public:
     
 private:
     void UpdateAnimationPlayback(float deltaTime, ECS::Registry& registry);
+
+    std::map<std::string, glm::mat4> m_locomotionPose;
+    std::map<std::string, glm::mat4> m_skillPose;
 };
 
 } // namespace Systems

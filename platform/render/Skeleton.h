@@ -6,7 +6,6 @@
 #include <string>
 #include <map>
 #include <vector>
-#include <functional>
 
 namespace Engine {
 namespace Platform {
@@ -43,15 +42,16 @@ public:
     
     size_t GetBoneCount() const { return m_bones.size(); }
     
-    // Update bone transforms from animation (node-local keyed by name).
-    // Missing keys fall back to bind-pose local transforms from the FBX hierarchy.
+    /// Node-local pose. Missing channels keep the FBX bind-pose local matrix.
+    /// An empty map, or a skeleton with no hierarchy root, resets to bind pose.
     void UpdateBoneTransforms(const std::map<std::string, glm::mat4>& animationTransforms);
 
-    // Merge two keyed pose maps. Overlay keys replace primary when predicate returns true.
+    /// Writes \p primaryTransforms, then replaces channels for which
+    /// \p useOverlayForNode returns true. \p useOverlayForNode may be null.
     void UpdateBoneTransformsLayered(
         const std::map<std::string, glm::mat4>& primaryTransforms,
         const std::map<std::string, glm::mat4>& overlayTransforms,
-        const std::function<bool(const std::string& nodeName)>& useOverlayForNode);
+        bool (*useOverlayForNode)(const std::string& nodeName));
 
     // Skip GPU skinning (boneCount=0). Mesh verts stay in authored bind pose.
     void ResetToBindPose();
@@ -73,6 +73,9 @@ public:
     // Deep copy of hierarchy/bind data for per-character pose state (clips stay shared).
     Skeleton Clone() const;
     
+    /// Skinning matrix per bone id.
+    /// 0: inverse(root) * global * offset (Assimp). 1: global * offset.
+    /// 2: offset * global. 3: offset * global * inverse(root).
     void SetMatrixFormulaMode(int mode) { m_matrixFormulaMode = mode; }
     int GetMatrixFormulaMode() const { return m_matrixFormulaMode; }
 
@@ -88,15 +91,13 @@ private:
     glm::mat4 m_globalInverseTransform{1.0f};
     int m_matrixFormulaMode = 0;
 
-    std::map<std::string, std::string> m_boneParentMap;
     std::map<std::string, std::string> m_nodeParentMap;
     std::map<std::string, glm::mat4> m_nodeBindLocal;
     std::map<std::string, std::vector<std::string>> m_nodeChildren;
     
     void ExtractBonesFromMeshes(const aiScene* scene);
-    void BuildBoneHierarchy(aiNode* node, const aiScene* scene, const glm::mat4& parentTransform);
+    void BuildBoneHierarchy(aiNode* node);
     void StoreNodeHierarchy(aiNode* node, const std::string& parentName);
-    std::string FindBoneAncestor(const std::string& boneName);
     int GetOrCreateBoneID(const std::string& boneName);
     void ApplyNodeHierarchy(const std::string& nodeName,
                             const glm::mat4& parentGlobal,
