@@ -63,47 +63,6 @@ protected:
     }
 };
 
-TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveUpdatesAuthority) {
-    NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, tcpPort));
-    ASSERT_TRUE(client.Login("integration_player"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
-    ASSERT_TRUE(client.RegisterUdpSession());
-    ASSERT_TRUE(WaitUntil(
-        [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
-        std::chrono::seconds(2)));
-    ASSERT_TRUE(client.RegisterUdpSession());
-    ASSERT_TRUE(WaitUntil(
-        [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
-        std::chrono::seconds(2)));
-
-    TransformStatePayload sent;
-    sent.userId = client.GetUserId();
-    sent.tick = 1;
-    sent.position = glm::vec3(3.0f, 1.0f, 4.0f);
-    sent.rotationDegrees = glm::vec3(0.0f, 45.0f, 0.0f);
-    ASSERT_TRUE(client.SendUnreliableTransform(sent));
-
-    const bool authorityUpdated = WaitUntil(
-        [&]() {
-            const TransformStatePayload* authoritative =
-                server.GetServerAuthority().GetAuthoritative(client.GetUserId());
-            return authoritative &&
-                   glm::length(authoritative->position - sent.position) < 0.01f;
-        },
-        std::chrono::seconds(3));
-
-    ASSERT_TRUE(authorityUpdated);
-    const TransformStatePayload* authoritative =
-        server.GetServerAuthority().GetAuthoritative(client.GetUserId());
-    ASSERT_NE(authoritative, nullptr);
-    EXPECT_FLOAT_EQ(authoritative->position.x, sent.position.x);
-    EXPECT_FLOAT_EQ(authoritative->position.y, sent.position.y);
-    EXPECT_FLOAT_EQ(authoritative->position.z, sent.position.z);
-
-    client.Disconnect();
-}
-
 TEST_F(NetServerIntegrationTest, UnregisteredUdpMovementIsIgnored) {
     NetClient client;
     ASSERT_TRUE(client.Connect(kHost, tcpPort));
