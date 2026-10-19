@@ -2,7 +2,6 @@
 #include "Logger.h"
 
 #include <algorithm>
-#include <functional>
 
 namespace Engine {
 namespace Platform {
@@ -28,7 +27,6 @@ bool Skeleton::LoadSkeleton(const aiScene* scene) {
     
     m_bones.clear();
     m_boneArray.clear();
-    m_boneParentMap.clear();
     m_nodeParentMap.clear();
     m_nodeBindLocal.clear();
     m_nodeChildren.clear();
@@ -41,7 +39,7 @@ bool Skeleton::LoadSkeleton(const aiScene* scene) {
     ExtractBonesFromMeshes(scene);
     
     if (m_bones.empty()) {
-        BuildBoneHierarchy(scene->mRootNode, scene, glm::mat4(1.0f));
+        BuildBoneHierarchy(scene->mRootNode);
     }
     
     if (m_bones.empty()) {
@@ -54,16 +52,7 @@ bool Skeleton::LoadSkeleton(const aiScene* scene) {
     m_globalInverseTransform = glm::inverse(AiToGlm(scene->mRootNode->mTransformation));
     
     StoreNodeHierarchy(scene->mRootNode, "");
-    
-    m_boneParentMap.clear();
-    for (const auto& bonePair : m_bones) {
-        const std::string& boneName = bonePair.first;
-        std::string boneAncestor = FindBoneAncestor(boneName);
-        if (!boneAncestor.empty() && boneAncestor != boneName) {
-            m_boneParentMap[boneName] = boneAncestor;
-        }
-    }
-    
+
     m_boneArray.assign(m_maxBoneCount, nullptr);
     for (auto& pair : m_bones) {
         Bone& bone = pair.second;
@@ -106,21 +95,20 @@ void Skeleton::ExtractBonesFromMeshes(const aiScene* scene) {
     m_maxBoneCount = m_bones.size();
 }
 
-void Skeleton::BuildBoneHierarchy(aiNode* node, const aiScene* scene, const glm::mat4& parentTransform) {
-    std::string nodeName = std::string(node->mName.C_Str());
-    
-    glm::mat4 localTransform = AiToGlm(node->mTransformation);
-    glm::mat4 globalTransform = parentTransform * localTransform;
-    
-    auto boneIt = m_bones.find(nodeName);
-    if (boneIt == m_bones.end()) {
-        int boneID = GetOrCreateBoneID(nodeName);
+void Skeleton::BuildBoneHierarchy(aiNode* node) {
+    if (!node) {
+        return;
+    }
+
+    const std::string nodeName(node->mName.C_Str());
+    if (m_bones.find(nodeName) == m_bones.end()) {
+        const int boneID = GetOrCreateBoneID(nodeName);
         m_bones[nodeName] = Bone(nodeName, boneID, glm::mat4(1.0f));
         m_maxBoneCount = std::max(m_maxBoneCount, m_bones.size());
     }
-    
-    for (unsigned int i = 0; i < node->mNumChildren; i++) {
-        BuildBoneHierarchy(node->mChildren[i], scene, globalTransform);
+
+    for (unsigned int i = 0; i < node->mNumChildren; ++i) {
+        BuildBoneHierarchy(node->mChildren[i]);
     }
 }
 
@@ -137,30 +125,6 @@ void Skeleton::StoreNodeHierarchy(aiNode* node, const std::string& parentName) {
     for (unsigned int i = 0; i < node->mNumChildren; i++) {
         StoreNodeHierarchy(node->mChildren[i], nodeName);
     }
-}
-
-std::string Skeleton::FindBoneAncestor(const std::string& boneName) {
-    std::string currentNode = boneName;
-    int maxDepth = 64;
-    int depth = 0;
-    
-    while (depth < maxDepth) {
-        auto parentIt = m_nodeParentMap.find(currentNode);
-        if (parentIt == m_nodeParentMap.end()) {
-            break;
-        }
-        
-        const std::string& parentName = parentIt->second;
-        
-        if (m_bones.find(parentName) != m_bones.end()) {
-            return parentName;
-        }
-        
-        currentNode = parentName;
-        depth++;
-    }
-    
-    return "";
 }
 
 int Skeleton::GetOrCreateBoneID(const std::string& boneName) {
@@ -298,6 +262,29 @@ void Skeleton::UpdateBoneTransforms(const std::map<std::string, glm::mat4>& anim
     ApplyNodeHierarchy(m_hierarchyRootName, glm::mat4(1.0f), animationTransforms);
 }
 
+void Skeleton::UpdateBoneTransformsLayered(
+    const std::map<std::string, glm::mat4>& primaryTransforms,
+    const std::map<std::string, glm::mat4>& overlayTransforms,
+    bool (*useOverlayForNode)(const std::string& nodeName)) {
+    if (!m_loaded || primaryTransforms.empty() || m_hierarchyRootName.empty()) {
+        ResetToBindPose();
+        return;
+    }
+
+    std::map<std::string, glm::mat4> merged = primaryTransforms;
+    if (overlayTransforms.empty() || !useOverlayForNode) {
+        UpdateBoneTransforms(merged);
+        return;
+    }
+
+    for (const auto& entry : overlayTransforms) {
+        if (useOverlayForNode(entry.first)) {
+            merged[entry.first] = entry.second;
+        }
+    }
+    UpdateBoneTransforms(merged);
+}
+
 void Skeleton::GetFinalBoneMatrices(std::vector<glm::mat4>& boneMatrices) const {
     if (!m_loaded) {
         return;
@@ -333,6 +320,32 @@ void Skeleton::GetFinalBoneMatrices(std::vector<glm::mat4>& boneMatrices) const 
                 break;
         }
     }
+}
+
+Skeleton Skeleton::Clone() const {
+    Skeleton copy;
+    copy.m_loaded = m_loaded;
+    copy.m_bindPoseActive = true;
+    copy.m_bones = m_bones;
+    copy.m_maxBoneCount = m_maxBoneCount;
+    copy.m_rootBoneName = m_rootBoneName;
+    copy.m_hierarchyRootName = m_hierarchyRootName;
+    copy.m_boneCounter = m_boneCounter;
+    copy.m_globalInverseTransform = m_globalInverseTransform;
+    copy.m_matrixFormulaMode = m_matrixFormulaMode;
+    copy.m_nodeParentMap = m_nodeParentMap;
+    copy.m_nodeBindLocal = m_nodeBindLocal;
+    copy.m_nodeChildren = m_nodeChildren;
+
+    copy.m_boneArray.assign(copy.m_maxBoneCount, nullptr);
+    for (auto& pair : copy.m_bones) {
+        Bone& bone = pair.second;
+        if (bone.id >= 0 && bone.id < static_cast<int>(copy.m_boneArray.size())) {
+            copy.m_boneArray[bone.id] = &bone;
+        }
+    }
+    copy.ResetToBindPose();
+    return copy;
 }
 
 } // namespace Render

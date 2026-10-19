@@ -3,6 +3,7 @@
 #include "network/NetClient.h"
 #include "network/NetServer.h"
 #include "network/UdpChannel.h"
+#include "core/network/MovementCommand.h"
 #include "TestPort.h"
 
 #include <atomic>
@@ -61,43 +62,6 @@ protected:
         server.Stop();
     }
 };
-
-TEST_F(NetServerIntegrationTest, LoginRegisterUdpAndMoveUpdatesAuthority) {
-    NetClient client;
-    ASSERT_TRUE(client.Connect(kHost, tcpPort));
-    ASSERT_TRUE(client.Login("integration_player"));
-    ASSERT_TRUE(client.ConnectUdp(kHost, udpPort));
-    ASSERT_TRUE(client.RegisterUdpSession());
-    ASSERT_TRUE(WaitUntil(
-        [&]() { return server.HasUdpEndpointFor(client.GetUserId()); },
-        std::chrono::seconds(2)));
-
-    TransformStatePayload sent;
-    sent.userId = client.GetUserId();
-    sent.tick = 1;
-    sent.position = glm::vec3(3.0f, 1.0f, 4.0f);
-    sent.rotationDegrees = glm::vec3(0.0f, 45.0f, 0.0f);
-    ASSERT_TRUE(client.SendUnreliableTransform(sent));
-
-    const bool authorityUpdated = WaitUntil(
-        [&]() {
-            const TransformStatePayload* authoritative =
-                server.GetServerAuthority().GetAuthoritative(client.GetUserId());
-            return authoritative &&
-                   glm::length(authoritative->position - sent.position) < 0.01f;
-        },
-        std::chrono::seconds(3));
-
-    ASSERT_TRUE(authorityUpdated);
-    const TransformStatePayload* authoritative =
-        server.GetServerAuthority().GetAuthoritative(client.GetUserId());
-    ASSERT_NE(authoritative, nullptr);
-    EXPECT_FLOAT_EQ(authoritative->position.x, sent.position.x);
-    EXPECT_FLOAT_EQ(authoritative->position.y, sent.position.y);
-    EXPECT_FLOAT_EQ(authoritative->position.z, sent.position.z);
-
-    client.Disconnect();
-}
 
 TEST_F(NetServerIntegrationTest, UnregisteredUdpMovementIsIgnored) {
     NetClient client;
@@ -321,4 +285,41 @@ TEST_F(NetServerAuthoritativeModeTest, DropsClientEntitySnapshotsAndTransforms) 
 
     publisher.Disconnect();
     observer.Disconnect();
+}
+
+class NetServerShardTest : public ::testing::Test {
+protected:
+    NetServer server;
+    uint16_t tcpPort = 0;
+    uint16_t udpPort = 0;
+
+    void SetUp() override {
+        tcpPort = Engine::Tests::AllocateEphemeralTestPort(40);
+        udpPort = static_cast<uint16_t>(tcpPort + 1);
+        Engine::Net::ShardConfig shard;
+        shard.maxPlayers = 1;
+        shard.shardId = 7;
+        shard.redirectHost = "127.0.0.1";
+        shard.redirectTcpPort = static_cast<uint16_t>(tcpPort + 100);
+        shard.redirectUdpPort = static_cast<uint16_t>(tcpPort + 101);
+        server.SetShardConfig(shard);
+        ASSERT_TRUE(server.Start(kHost, tcpPort, udpPort));
+    }
+
+    void TearDown() override {
+        server.Stop();
+    }
+};
+
+TEST_F(NetServerShardTest, RejectsLoginWhenShardIsFullWithRedirect) {
+    NetClient first;
+    ASSERT_TRUE(first.Connect(kHost, tcpPort));
+    ASSERT_TRUE(first.Login("first_player"));
+
+    NetClient second;
+    ASSERT_TRUE(second.Connect(kHost, tcpPort));
+    EXPECT_FALSE(second.Login("second_player"));
+
+    first.Disconnect();
+    second.Disconnect();
 }

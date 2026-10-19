@@ -3,8 +3,11 @@
 #include "core/System.h"
 #include "ui/MenuStyle.h"
 #include "ui/FontLibrary.h"
+#include "ui/UILayer.h"
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <vector>
 
 struct nk_context;
 
@@ -33,7 +36,15 @@ public:
     // Draw the current UI builder without needing ECS (used during boot loading).
     void PresentFrame();
 
+    // Single-callback builder (legacy). Clears any registered layers.
     void SetUIBuilder(UIBuilder builder);
+
+    // Register a draw callback on a UI layer. Lower UILayerId values draw behind higher ones.
+    // Multiple callbacks on the same layer draw in registration order.
+    void RegisterLayer(UILayerId layer, UIBuilder callback, const char* debugName = nullptr);
+    void ClearLayers();
+    bool HasRegisteredLayers() const { return !m_layers.empty(); }
+
     void SetStyle(const MenuStyle& style);
     MenuStyle& GetStyle() { return m_style; }
     const MenuStyle& GetStyle() const { return m_style; }
@@ -52,10 +63,21 @@ public:
     bool MenuButton(struct nk_context* ctx, const char* label, float width = 0.0f, float height = 0.0f) const;
 
 private:
+    struct RegisteredUILayer {
+        UILayerId layer = UILayerId::Background;
+        UIBuilder callback;
+        const char* debugName = nullptr;
+        uint32_t registrationOrder = 0;
+    };
+
+    void InvokeLayers(struct nk_context* ctx, int screenWidth, int screenHeight);
+
     std::unique_ptr<NuklearUI> m_nuklear;
     FontLibrary m_fontLibrary;
     MenuStyle m_style;
     UIBuilder m_builder;
+    std::vector<RegisteredUILayer> m_layers;
+    uint32_t m_nextLayerRegistrationOrder = 0;
     Window* m_window = nullptr;
     bool m_blockingGameInput = false;
     bool m_styleApplied = false;

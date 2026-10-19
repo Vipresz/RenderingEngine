@@ -11,7 +11,7 @@ namespace Net {
 class CredentialStore {
 public:
     void SetRequireCredentials(bool required) { m_requireCredentials = required; }
-    bool RequiresCredentials() const { return m_requireCredentials; }
+    bool RequiresCredentials() const { return m_requireCredentials || !m_users.empty(); }
 
     bool RegisterUser(const std::string& username, const std::string& password);
     bool Verify(const std::string& username, const std::string& password) const;
@@ -21,6 +21,7 @@ public:
     bool SaveToFile(const std::string& path) const;
 
 private:
+    void OnUsersLoaded();
     struct StoredCredential {
         PasswordHashRecord record;
     };

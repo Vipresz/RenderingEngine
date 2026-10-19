@@ -12,8 +12,11 @@
 #include "network/TlsSession.h"
 #include "render/components/TransformComponent.h"
 
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,6 +57,7 @@ public:
 
     Engine::Net::UserId GetLocalUserId() const;
     bool IsLoggedIn() const;
+    float GetRoundTripTimeMs() const;
 
     NetClient& GetClient() { return m_client; }
     const NetClient& GetClient() const { return m_client; }
@@ -68,6 +72,7 @@ public:
     void SetUseUdpForMovement(bool enabled) { m_client.SetUseUdpForMovement(enabled); }
     bool SendEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
     bool SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snapshot);
+    void RequestWorldResync();
 
     // Shared mesh for remote players (e.g. male_model.obj). Scale matches local character.
     void SetRemotePlayerModel(Engine::Platform::Render::Model* model, float scale = 1.0f);
@@ -82,6 +87,8 @@ public:
     void CollectRemotePlayerEntities(std::vector<EntityID>& out) const;
 
     EntityID EnsureRemoteEntity(Engine::Net::UserId userId, ECS::Registry& registry);
+    EntityID TryGetPlayerEntity(Engine::Net::UserId userId) const;
+    Engine::Net::UserId TryGetUserIdForEntity(EntityID entity) const;
 
     const std::string& GetPeerDisplayName(Engine::Net::UserId userId) const;
 
@@ -101,8 +108,30 @@ public:
     void SetTlsConfig(const TlsConfig& config) { m_client.SetTlsConfig(config); }
     void SetAuthToken(std::string token) { m_client.SetAuthToken(std::move(token)); }
 
+    // Poll sockets only. Use during movement-ack or login waits instead of Update()
+    // so replication/ECS work does not delay time-sensitive network IO.
+    void PollNetwork();
+
+    // Apply deferred replication and run interpolation/send logic. Normally called
+    // from Update() after PollNetwork(); may be called on a fixed gameplay tick.
+    void ProcessNetworkFrame(float deltaTime, ECS::Registry& registry, uint64_t tickNumber);
+
+    // Poll until a movement ack for commandTick arrives. Does not replace client callbacks.
+    // Call ArmMovementAckWait() before SendMovementCommand(), then this method (or PollNetwork in a loop).
+    void ArmMovementAckWait(uint64_t commandTick, std::atomic<bool>* signal);
+    void DisarmMovementAckWait();
+    bool PollUntilMovementAck(std::chrono::milliseconds timeout);
+    bool WaitForMovementAck(uint64_t commandTick, std::chrono::milliseconds timeout);
+
     void Update(float deltaTime, ECS::Registry& registry, uint64_t tickNumber) override;
     void Shutdown(ECS::Registry& registry) override;
+
+    size_t PendingEntitySnapshotCount() const { return m_pendingEntitySnapshots.size(); }
+    size_t PendingComponentSnapshotCount() const { return m_pendingComponentSnapshots.size(); }
+
+    // Mirrors the NetClient receive path; useful for tests and offline replay tooling.
+    void StageEntitySnapshot(const Engine::Net::EntitySnapshot& snapshot);
+    void StageComponentSnapshot(const Engine::Net::ComponentSnapshot& snapshot);
 
 private:
     struct RemotePlaybackState {
@@ -117,6 +146,10 @@ private:
         float airVelocityZ = 0.0f;
         float groundLevel = 0.0f;
         uint8_t animationState = 0; // MovementAnimationState
+        float currentAnimationTime = 0.0f;
+        float locomotionSpeed = 0.0f;
+        bool isLooping = true;
+        bool landingActive = false;
         bool initialized = false;
     };
 
@@ -131,6 +164,7 @@ private:
     void ApplyLocalServerCorrection(ECS::Registry& registry);
     void ReconcileWithRollback(ECS::Registry& registry, const Engine::Net::TransformStatePayload& serverState);
     void InterpolateRemoteTransforms(float deltaTime, ECS::Registry& registry);
+    void FlushDeferredSnapshots();
     static float LerpAngleDegrees(float from, float to, float t);
     static glm::vec3 LerpAnglesDegrees(const glm::vec3& from, const glm::vec3& to, float t);
 
@@ -140,6 +174,8 @@ private:
     std::unordered_map<Engine::Net::UserId, Engine::Net::TransformStatePayload> m_pendingTransforms;
     std::unordered_map<Engine::Net::UserId, RemotePlaybackState> m_remotePlayback;
     std::vector<Engine::Net::UserId> m_pendingRemovals;
+    std::vector<Engine::Net::EntitySnapshot> m_pendingEntitySnapshots;
+    std::vector<Engine::Net::ComponentSnapshot> m_pendingComponentSnapshots;
     GenericDataHandler m_genericDataHandler;
     WorldSnapshotHandler m_worldSnapshotHandler;
     EntitySnapshotHandler m_entitySnapshotHandler;
@@ -163,6 +199,11 @@ private:
     bool m_authoritativeClient = true;
     uint64_t m_lastAcknowledgedTick = 0;
     uint64_t m_lastSentCommandTick = 0;
+    uint64_t m_pendingMovementAckTick = 0;
+    std::atomic<bool>* m_pendingMovementAckSignal = nullptr;
+    std::mutex m_movementAckMutex;
+    float m_pingAccumulator = 0.0f;
+    float m_pingIntervalSeconds = 2.0f;
 };
 
 } // namespace Systems

@@ -53,9 +53,9 @@ $occArgs += @(
 )
 
 Write-Host "Running OpenCppCoverage on $testExe ..."
-& $OpenCppCoverage @occArgs | Out-Null
+& $OpenCppCoverage @occArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "OpenCppCoverage failed with exit code $LASTEXITCODE"
+    Write-Error "OpenCppCoverage failed with exit code $LASTEXITCODE (see EngineTests output above for failing cases)"
 }
 
 [xml]$report = Get-Content $coverageXml

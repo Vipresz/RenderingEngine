@@ -1,0 +1,29 @@
+{
+  "zoneId": "join_load_arena",
+  "shard": {
+    "shardId": 1,
+    "maxPlayers": 128,
+    "redirectHost": "127.0.0.1",
+    "redirectTcpPort": 17877,
+    "redirectUdpPort": 17878
+  },
+  "scalePolicy": {
+    "overflowPolicy": "LayerThenShard",
+    "shardSoftCap": 100,
+    "shardHardCap": 128,
+    "shardSplitThreshold": 120,
+    "shardTickMsSoftLimit": 12.0,
+    "shardTickMsHardLimit": 16.0,
+    "cellLayerDensityThreshold": 32,
+    "densityCellSize": 32.0,
+    "layerFullRadius": 24.0,
+    "layerMidRadius": 64.0,
+    "layerFarRadius": 128.0,
+    "layerFullRadiusCrowded": 16.0,
+    "observersCapNormal": 64,
+    "observersCapCrowded": 24,
+    "snapshotIntervalNormalSeconds": 0.1,
+    "snapshotIntervalCrowdedSeconds": 0.15,
+    "snapshotIntervalStressedSeconds": 0.2
+  }
+}

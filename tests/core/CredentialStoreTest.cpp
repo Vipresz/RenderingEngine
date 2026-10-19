@@ -8,8 +8,8 @@ using Engine::Net::CredentialStore;
 
 TEST(CredentialStoreTest, RegisterAndVerifyUser) {
     CredentialStore store;
-    store.SetRequireCredentials(true);
     ASSERT_TRUE(store.RegisterUser("alice", "secret123"));
+    EXPECT_TRUE(store.RequiresCredentials());
     EXPECT_TRUE(store.Verify("alice", "secret123"));
     EXPECT_FALSE(store.Verify("alice", "wrong"));
     EXPECT_FALSE(store.Verify("bob", "secret123"));
@@ -24,6 +24,7 @@ TEST(CredentialStoreTest, SaveAndLoadFileRoundTrip) {
 
     CredentialStore loaded;
     ASSERT_TRUE(loaded.LoadFromFile(tempPath.string()));
+    EXPECT_TRUE(loaded.RequiresCredentials());
     EXPECT_TRUE(loaded.Verify("bob", "pw"));
     std::filesystem::remove(tempPath);
 }

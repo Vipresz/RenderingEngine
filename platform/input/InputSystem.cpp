@@ -200,12 +200,25 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
         moveDirection += rightDir;
     }
 
-    const bool isRunning =
+    const bool manualMove = glm::length(moveDirection) > 0.0f;
+    if (manualMove && m_followCancelCallback) {
+        m_followCancelCallback();
+    }
+
+    bool isRunning =
         (keys[GLFW_KEY_LEFT_SHIFT] || keys[GLFW_KEY_RIGHT_SHIFT]) &&
         (keys[GLFW_KEY_W] || keys[GLFW_KEY_UP]);
-    const bool isMoving = glm::length(moveDirection) > 0.0f;
+    bool isMoving = manualMove;
     if (isMoving) {
         moveDirection = glm::normalize(moveDirection);
+    } else if (m_followAutoMoveQuery) {
+        glm::vec3 followDirection(0.0f);
+        bool followRun = false;
+        if (m_followAutoMoveQuery(followDirection, followRun)) {
+            moveDirection = followDirection;
+            isMoving = true;
+            isRunning = followRun;
+        }
     }
 
     const bool rmbHeld = m_window->isMouseButtonDown(GLFW_MOUSE_BUTTON_RIGHT) ||
@@ -217,6 +230,10 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
         const bool isOnGround = std::abs(transform->position.y - animComp->groundLevel) < 0.2f;
         spaceJustPressed = keys[GLFW_KEY_SPACE] && !m_spacePressedLastFrame && isOnGround;
         m_spacePressedLastFrame = keys[GLFW_KEY_SPACE];
+    }
+
+    if (spaceJustPressed && m_followCancelCallback) {
+        m_followCancelCallback();
     }
 
     MovementCommand command;

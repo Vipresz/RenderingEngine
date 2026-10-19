@@ -1,0 +1,36 @@
+{
+  "zoneId": "join_load_stress_arena",
+  "shard": {
+    "shardId": 1,
+    "maxPlayers": 1200,
+    "redirectHost": "127.0.0.1",
+    "redirectTcpPort": 17877,
+    "redirectUdpPort": 17878
+  },
+  "scalePolicy": {
+    "overflowPolicy": "LayerFirst",
+    "shardSoftCap": 1152,
+    "shardHardCap": 1200,
+    "shardSplitThreshold": 1000,
+    "shardTickMsSoftLimit": 12.0,
+    "shardTickMsHardLimit": 16.0,
+    "layerMinShardPlayers": 256,
+    "layerSplitSeedPlayers": 128,
+    "cellLayerDensityThreshold": 24,
+    "densityCellSize": 32.0,
+    "layerFullRadius": 20.0,
+    "layerMidRadius": 48.0,
+    "layerFarRadius": 96.0,
+    "layerFullRadiusCrowded": 12.0,
+    "observersCapNormal": 48,
+    "observersCapCrowded": 16,
+    "maxPeerTransformsPerTick": 12288,
+    "maxVisibilityEventsPerTick": 384,
+    "spawnSpacingMin": 3.0,
+    "spawnSpacingMax": 12.0,
+    "targetMaxCellDensity": 32,
+    "snapshotIntervalNormalSeconds": 0.1,
+    "snapshotIntervalCrowdedSeconds": 0.2,
+    "snapshotIntervalStressedSeconds": 0.25
+  }
+}

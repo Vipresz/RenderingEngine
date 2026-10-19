@@ -8,6 +8,7 @@
 #include "render/Window.h"
 #include "render/components/TransformComponent.h"
 #include <functional>
+#include <glm/glm.hpp>
 
 namespace Engine {
 namespace Platform {
@@ -63,6 +64,15 @@ public:
     void SetInputBlockQuery(std::function<bool()> query) { m_inputBlockQuery = std::move(query); }
     void SetEscapeCallback(std::function<void()> callback) { m_escapeCallback = std::move(callback); }
 
+    // Optional auto-walk (e.g. follow another player). Manual movement cancels via callback.
+    using FollowAutoMoveQuery = std::function<bool(glm::vec3& outDirection, bool& outRun)>;
+    void SetFollowAutoMoveQuery(FollowAutoMoveQuery query) {
+        m_followAutoMoveQuery = std::move(query);
+    }
+    void SetFollowCancelCallback(std::function<void()> callback) {
+        m_followCancelCallback = std::move(callback);
+    }
+
     // When false, game code handles camera mouse/scroll (e.g. LMB-only orbit)
     void SetBuiltInCameraInputEnabled(bool enabled) { m_builtInCameraInput = enabled; }
 
@@ -86,6 +96,8 @@ private:
     bool m_escapePressedLastFrame = false;
     std::function<bool()> m_inputBlockQuery;
     std::function<void()> m_escapeCallback;
+    FollowAutoMoveQuery m_followAutoMoveQuery;
+    std::function<void()> m_followCancelCallback;
     bool m_builtInCameraInput = true;
     Engine::Net::InputBuffer m_inputBuffer;
     

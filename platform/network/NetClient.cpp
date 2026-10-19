@@ -1,6 +1,7 @@
 #include "network/NetClient.h"
 
 #include "Logger.h"
+#include "core/network/SecureSecret.h"
 #include "core/network/ReplicationTypes.h"
 
 #ifdef _WIN32
@@ -12,6 +13,16 @@
 
 #include <chrono>
 #include <thread>
+
+namespace {
+
+#if defined(ENGINE_LOW_COST_PBKDF2)
+constexpr std::chrono::seconds kLoginWaitTimeout{30};
+#else
+constexpr std::chrono::seconds kLoginWaitTimeout{5};
+#endif
+
+} // namespace
 
 namespace Engine {
 namespace Platform {
@@ -69,6 +80,12 @@ bool NetClient::ConnectUdp(const std::string& host, uint16_t udpPort) {
                 m_callbacks.onTransformState(transform);
             }
         });
+    m_udpChannel.SetUdpMovementAckHandler(
+        [this](const Engine::Net::MovementAckPayload& ack, const UdpDatagramContext&) {
+            if (m_callbacks.onMovementAck) {
+                m_callbacks.onMovementAck(ack);
+            }
+        });
     return true;
 }
 
@@ -76,41 +93,140 @@ bool NetClient::Login(const std::string& displayName,
                       Engine::Net::UserId preferredUserId,
                       const std::string& username,
                       const std::string& password) {
-    if (!m_connected || !m_connection) {
-        return false;
+    constexpr int kMaxRedirectHops = 2;
+    for (int redirectHop = 0; redirectHop <= kMaxRedirectHops; ++redirectHop) {
+        if (!m_connected || !m_connection) {
+            return false;
+        }
+
+        m_loginRejected = false;
+        m_loginRedirectPending = false;
+        m_lastLoginDisplayName = displayName;
+
+        Engine::Net::LoginRequestPayload request;
+        request.displayName = displayName;
+        request.preferredUserId = preferredUserId;
+        request.username = username.empty() ? m_username : username;
+        request.password = password.empty() ? m_password : password;
+        request.authToken = m_authToken;
+        const Engine::Net::NetPacket message =
+            Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
+
+        // Use credentials only for this request; do not retain password bytes afterward.
+        Engine::Net::SecureZeroString(request.password);
+
+        if (!SendPacket(message)) {
+            return false;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - start < kLoginWaitTimeout) {
+            Poll();
+            if (m_loggedIn) {
+                LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
+                return true;
+            }
+            if (m_loginRedirectPending) {
+                break;
+            }
+            if (m_loginRejected) {
+                LOG_ERROR("NetClient", "Login rejected by server");
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (!m_loginRedirectPending) {
+            LOG_ERROR("NetClient", "Login timed out");
+            return false;
+        }
+
+        const std::string redirectHost = m_pendingRedirectHost;
+        const uint16_t redirectTcpPort = m_pendingRedirectTcpPort;
+        const uint16_t redirectUdpPort = m_pendingRedirectUdpPort;
+        const std::string migrationToken = m_pendingMigrationToken;
+        const Engine::Net::UserId redirectPreferredUserId =
+            preferredUserId != Engine::Net::kInvalidUserId ? preferredUserId : m_userId;
+        m_loginRedirectPending = false;
+        m_pendingRedirectHost.clear();
+        m_pendingRedirectTcpPort = 0;
+        m_pendingRedirectUdpPort = 0;
+        m_pendingMigrationToken.clear();
+
+        if (!FollowRedirect(redirectHost, redirectTcpPort, redirectUdpPort, redirectPreferredUserId, migrationToken)) {
+            return false;
+        }
     }
 
-    m_loginRejected = false;
+    LOG_ERROR("NetClient", "Login redirect hop limit exceeded");
+    return false;
+}
+
+bool NetClient::FollowRedirect(const std::string& host,
+                               uint16_t tcpPort,
+                               uint16_t udpPort,
+                               Engine::Net::UserId preferredUserId,
+                               const std::string& migrationToken) {
+    const Engine::Net::UserId preservedUserId = m_userId;
+    const std::string displayName = m_lastLoginDisplayName;
+    Disconnect();
+    if (!Connect(host, tcpPort)) {
+        LOG_ERROR_FMT("NetClient", "Failed to follow redirect to %s:%u", host.c_str(), tcpPort);
+        return false;
+    }
+    m_udpPort = udpPort != 0 ? udpPort : static_cast<uint16_t>(tcpPort + 1);
 
     Engine::Net::LoginRequestPayload request;
-    request.displayName = displayName;
-    request.preferredUserId = preferredUserId;
-    request.username = username.empty() ? m_username : username;
-    request.password = password.empty() ? m_password : password;
+    request.displayName = displayName.empty() ? "Player" : displayName;
+    request.preferredUserId = preferredUserId != Engine::Net::kInvalidUserId ? preferredUserId
+                                                                            : preservedUserId;
+    request.username = m_username;
+    request.password = m_password;
     request.authToken = m_authToken;
+    request.migrationToken = migrationToken;
     const Engine::Net::NetPacket message =
         Engine::Net::MakeMessage(Engine::Net::MessageType::LoginRequest, request.Serialize(), m_sequence++);
-
+    Engine::Net::SecureZeroString(request.password);
     if (!SendPacket(message)) {
         return false;
     }
 
     const auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
+    while (std::chrono::steady_clock::now() - start < kLoginWaitTimeout) {
         Poll();
         if (m_loggedIn) {
-            LOG_INFO_FMT("NetClient", "Logged in as user %u", m_userId);
+            LOG_INFO_FMT("NetClient", "Redirect login succeeded as user %u", m_userId);
             return true;
         }
         if (m_loginRejected) {
-            LOG_ERROR("NetClient", "Login rejected by server");
+            LOG_ERROR("NetClient", "Redirect login rejected by server");
             return false;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    LOG_ERROR("NetClient", "Login timed out");
+    LOG_ERROR("NetClient", "Redirect login timed out");
     return false;
+}
+
+bool NetClient::ProcessPendingZoneTransfer() {
+    if (!m_zoneTransferPending.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    const std::string redirectHost = m_pendingRedirectHost;
+    const uint16_t redirectTcpPort = m_pendingRedirectTcpPort;
+    const uint16_t redirectUdpPort = m_pendingRedirectUdpPort;
+    const std::string migrationToken = m_pendingMigrationToken;
+    const Engine::Net::UserId preferredUserId = m_userId;
+
+    m_zoneTransferPending.store(false, std::memory_order_release);
+    m_pendingRedirectHost.clear();
+    m_pendingRedirectTcpPort = 0;
+    m_pendingRedirectUdpPort = 0;
+    m_pendingMigrationToken.clear();
+
+    return FollowRedirect(redirectHost, redirectTcpPort, redirectUdpPort, preferredUserId, migrationToken);
 }
 
 bool NetClient::RegisterUdpSession() {
@@ -135,6 +251,9 @@ void NetClient::Disconnect() {
     m_loggedIn = false;
     m_userId = Engine::Net::kInvalidUserId;
     m_udpSessionToken = 0;
+    m_udpChannel.SetSessionToken(0);
+    m_udpChannel.SetEncryptPayloads(false);
+    Engine::Net::SecureZeroString(m_password);
 
     if (m_connection) {
         m_connection->Close();
@@ -173,6 +292,23 @@ bool NetClient::SendUnreliableTransform(const Engine::Net::TransformStatePayload
     return m_udpChannel.SendUnreliableTransform(outgoing);
 }
 
+bool NetClient::SendMovementCommand(const Engine::Net::MovementCommand& command) {
+    if (!m_loggedIn) {
+        return false;
+    }
+    if (m_useUdpForMovement && m_udpChannel.IsOpen()) {
+        return m_udpChannel.SendMovementCommand(command);
+    }
+
+    Engine::Net::GenericDataPayload payload;
+    payload.userId = m_userId;
+    payload.tick = command.tick;
+    payload.channel = Engine::Net::kMovementCommandChannel;
+    const Engine::Net::NetBuffer buffer = Engine::Net::SerializeMovementCommand(command);
+    payload.data = buffer.Data();
+    return SendGenericData(payload);
+}
+
 bool NetClient::SendGenericData(const Engine::Net::GenericDataPayload& payload) {
     if (!m_loggedIn) {
         return false;
@@ -197,6 +333,20 @@ bool NetClient::SendWorldSnapshot(const Engine::Net::WorldSnapshotPayload& snaps
     }
     return SendPacket(Engine::Net::MakeMessage(
         Engine::Net::MessageType::WorldSnapshot, snapshot.Serialize(), m_sequence++));
+}
+
+bool NetClient::SendPing() {
+    if (!m_loggedIn) {
+        return false;
+    }
+
+    Engine::Net::PingPayload ping;
+    ping.sequence = ++m_pingSequence;
+    ping.sentTimestampMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count());
+    return SendPacket(Engine::Net::MakeMessage(
+        Engine::Net::MessageType::Ping, ping.Serialize(), m_sequence++));
 }
 
 void NetClient::Poll() {
@@ -235,6 +385,27 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
                 m_loggedIn = true;
                 m_userId = response.assignedUserId;
                 m_udpSessionToken = response.udpSessionToken;
+                m_udpChannel.SetSessionToken(m_udpSessionToken);
+                Engine::Net::SecureZeroString(m_password);
+                if (!m_authToken.empty() && m_udpSessionToken != 0) {
+                    m_udpChannel.SetEncryptPayloads(true);
+                    m_udpChannel.SetAuthTokenForEncryption(m_authToken);
+                }
+            } else if (response.redirect && !response.redirectHost.empty() && response.redirectTcpPort != 0) {
+                m_pendingRedirectHost = response.redirectHost;
+                m_pendingRedirectTcpPort = response.redirectTcpPort;
+                m_pendingRedirectUdpPort = response.redirectUdpPort;
+                m_pendingMigrationToken = response.migrationToken;
+                if (m_loggedIn) {
+                    m_zoneTransferPending.store(true, std::memory_order_release);
+                } else {
+                    m_loginRedirectPending = true;
+                }
+                LOG_INFO_FMT("NetClient",
+                             "Login redirect to shard %u at %s:%u",
+                             response.shardId,
+                             response.redirectHost.c_str(),
+                             response.redirectTcpPort);
             } else {
                 m_loginRejected = true;
                 LOG_ERROR_FMT("NetClient", "Login failed: %s", response.message.c_str());
@@ -255,11 +426,40 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             }
             break;
         }
+        case Engine::Net::MessageType::ZoneTransfer: {
+            Engine::Net::ZoneTransferPayload transfer;
+            if (!Engine::Net::ZoneTransferPayload::Deserialize(message.payload, transfer)) {
+                break;
+            }
+            m_pendingRedirectHost = transfer.redirectHost;
+            m_pendingRedirectTcpPort = transfer.redirectTcpPort;
+            m_pendingRedirectUdpPort = transfer.redirectUdpPort;
+            m_pendingMigrationToken = transfer.migrationToken;
+            m_zoneTransferPending.store(true, std::memory_order_release);
+            if (m_callbacks.onZoneTransfer) {
+                m_callbacks.onZoneTransfer(transfer);
+            }
+            LOG_INFO_FMT("NetClient",
+                         "Zone transfer requested to shard %u at %s:%u (%s)",
+                         transfer.shardId,
+                         transfer.redirectHost.c_str(),
+                         transfer.redirectTcpPort,
+                         transfer.reason.c_str());
+            break;
+        }
         case Engine::Net::MessageType::TransformState: {
             Engine::Net::TransformStatePayload transform;
             if (Engine::Net::TransformStatePayload::Deserialize(message.payload, transform) &&
                 m_callbacks.onTransformState) {
                 m_callbacks.onTransformState(transform);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::MovementAck: {
+            Engine::Net::MovementAckPayload ack;
+            if (Engine::Net::MovementAckPayload::Deserialize(message.payload, ack) &&
+                m_callbacks.onMovementAck) {
+                m_callbacks.onMovementAck(ack);
             }
             break;
         }
@@ -292,6 +492,21 @@ void NetClient::HandlePacket(const Engine::Net::NetPacket& message) {
             if (Engine::Net::ComponentSnapshot::Deserialize(message.payload, snapshot) &&
                 m_callbacks.onComponentSnapshot) {
                 m_callbacks.onComponentSnapshot(snapshot);
+            }
+            break;
+        }
+        case Engine::Net::MessageType::Pong: {
+            Engine::Net::PongPayload pong;
+            if (!Engine::Net::PongPayload::Deserialize(message.payload, pong)) {
+                break;
+            }
+            const uint64_t nowMs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count());
+            if (nowMs >= pong.sentTimestampMs) {
+                m_roundTripTimeMs.store(static_cast<float>(nowMs - pong.sentTimestampMs),
+                                        std::memory_order_relaxed);
             }
             break;
         }

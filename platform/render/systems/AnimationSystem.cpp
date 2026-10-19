@@ -5,7 +5,8 @@
 #include "Logger.h"
 #include <cmath>
 #include <algorithm>
-#include <map>
+#include <cctype>
+#include <string>
 
 namespace Engine {
 namespace Platform {
@@ -14,8 +15,7 @@ namespace Systems {
 
 namespace {
 
-float ResolveLocomotionPlaybackRate(const Components::AnimationComponent& animComp,
-                                    float cycleDurationSeconds) {
+float ResolveLocomotionPlaybackRate(const Components::AnimationComponent& animComp) {
     const bool isRun =
         animComp.currentState == Components::AnimationComponent::AnimationState::Running;
     const bool isWalk =
@@ -26,7 +26,7 @@ float ResolveLocomotionPlaybackRate(const Components::AnimationComponent& animCo
 
     float speed = animComp.locomotionSpeed;
     if (speed < 0.01f) {
-        // Fallback if movement hasn't written speed yet this frame.
+        // Movement may not have published a speed yet this frame.
         speed = isRun ? animComp.runAnimReferenceSpeed * 0.7f : animComp.walkAnimReferenceSpeed * 0.56f;
     }
 
@@ -36,9 +36,7 @@ float ResolveLocomotionPlaybackRate(const Components::AnimationComponent& animCo
         return 1.0f;
     }
 
-    // Match foot-cycle rate to travel speed. Mixamo clips are usually authored faster than
-    // our gameplay walk/run speeds, so this scales playback down.
-    (void)cycleDurationSeconds;
+    // Mixamo clips are usually authored faster than gameplay walk/run, so scale playback down.
     return std::clamp(speed / referenceSpeed, 0.15f, 2.5f);
 }
 
@@ -66,21 +64,75 @@ bool JumpClipFinished(const Components::AnimationComponent& animComp) {
     return ClipFinished(animComp.currentAnimation, animComp.currentAnimationTime);
 }
 
-float ResolvePlaybackRate(const Components::AnimationComponent& animComp,
-                          float clipDurationSeconds) {
-    (void)clipDurationSeconds;
-    // Jump clips are cosmetic; physics owns vertical/horizontal travel — never time-scale to airtime.
+float ResolvePlaybackRate(const Components::AnimationComponent& animComp) {
+    // Jump clips are cosmetic. Physics owns travel, so do not time-scale them to airtime.
     if (animComp.currentState == Components::AnimationComponent::AnimationState::Jumping &&
         IsJumpTakeoffClip(animComp, animComp.currentAnimation)) {
         return 1.0f;
     }
-    return ResolveLocomotionPlaybackRate(animComp, clipDurationSeconds);
+    return ResolveLocomotionPlaybackRate(animComp);
+}
+
+bool ContainsLowerToken(const std::string& name, const char* token) {
+    const size_t tokenLen = std::char_traits<char>::length(token);
+    if (tokenLen == 0 || name.size() < tokenLen) {
+        return false;
+    }
+    for (size_t i = 0; i + tokenLen <= name.size(); ++i) {
+        bool match = true;
+        for (size_t j = 0; j < tokenLen; ++j) {
+            const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(name[i + j])));
+            if (c != token[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Mixamo-style upper body: spine, neck, head, shoulders, arms, hands.
+/// Legs, feet, toes, and the hips root stay on the locomotion clip.
+bool IsUpperBodyNodeName(const std::string& nodeName) {
+    if (ContainsLowerToken(nodeName, "upleg") || ContainsLowerToken(nodeName, "foot") ||
+        ContainsLowerToken(nodeName, "toe")) {
+        return false;
+    }
+    if (ContainsLowerToken(nodeName, "leg") && !ContainsLowerToken(nodeName, "fore")) {
+        return false;
+    }
+    if (ContainsLowerToken(nodeName, "hips") && !ContainsLowerToken(nodeName, "spine")) {
+        return false;
+    }
+
+    return ContainsLowerToken(nodeName, "spine") || ContainsLowerToken(nodeName, "neck") ||
+           ContainsLowerToken(nodeName, "head") || ContainsLowerToken(nodeName, "arm") ||
+           ContainsLowerToken(nodeName, "hand") || ContainsLowerToken(nodeName, "shoulder") ||
+           ContainsLowerToken(nodeName, "chest");
+}
+
+float SkillPlaybackRate(const Animation* clip, float desiredDurationSeconds) {
+    if (!clip || !clip->IsLoaded() || desiredDurationSeconds <= 0.01f) {
+        return 1.0f;
+    }
+    const float ticksPerSecond = clip->GetTicksPerSecond();
+    const float durationTicks = clip->GetDuration();
+    if (ticksPerSecond <= 0.0f || durationTicks <= 0.0f) {
+        return 1.0f;
+    }
+    const float clipDurationSeconds = durationTicks / ticksPerSecond;
+    return clipDurationSeconds / desiredDurationSeconds;
 }
 
 } // namespace
 
 AnimationSystem::AnimationSystem() {
-    SetPriority(50); // Run after InputSystem (0) but before RenderSystem (100)
+    // After NetworkSystem (55) and RemoteLoadoutApplySystem (56) so remote animation
+    // state is applied before clips advance and skeleton poses are written.
+    SetPriority(58);
 }
 
 void AnimationSystem::Initialize(ECS::Registry& registry) {
@@ -258,7 +310,7 @@ void AnimationSystem::UpdateAnimationPlayback(float deltaTime, ECS::Registry& re
             }
 
             const float durationSeconds = duration / ticksPerSecond;
-            const float playbackRate = ResolvePlaybackRate(*animComp, durationSeconds);
+            const float playbackRate = ResolvePlaybackRate(*animComp);
             animComp->currentAnimationTime += deltaTime * playbackRate;
             if (animComp->isLooping) {
                 if (durationSeconds > 0.0f && animComp->currentAnimationTime > durationSeconds) {
@@ -273,9 +325,38 @@ void AnimationSystem::UpdateAnimationPlayback(float deltaTime, ECS::Registry& re
             }
 
             const float timeInTicks = animComp->currentAnimationTime * ticksPerSecond;
-            std::map<std::string, glm::mat4> animationTransforms;
-            animComp->currentAnimation->GetBoneTransforms(timeInTicks, animationTransforms);
-            animComp->skeleton->UpdateBoneTransforms(animationTransforms);
+            m_locomotionPose.clear();
+            animComp->currentAnimation->GetBoneTransforms(timeInTicks, m_locomotionPose);
+
+            if (animComp->skillActive && animComp->skillAnimation &&
+                animComp->skillAnimation->IsLoaded()) {
+                const float skillTicksPerSecond = animComp->skillAnimation->GetTicksPerSecond();
+                const float skillDurationTicks = animComp->skillAnimation->GetDuration();
+                if (skillTicksPerSecond > 0.0f && skillDurationTicks > 0.0f) {
+                    const float skillRate =
+                        SkillPlaybackRate(animComp->skillAnimation, animComp->skillDurationSeconds);
+                    animComp->skillAnimationTime += deltaTime * skillRate;
+                    const float skillDurationSeconds = skillDurationTicks / skillTicksPerSecond;
+                    if (skillDurationSeconds > 0.0f &&
+                        animComp->skillAnimationTime > skillDurationSeconds) {
+                        animComp->skillAnimationTime = skillDurationSeconds;
+                    }
+
+                    const float skillTimeInTicks = animComp->skillAnimationTime * skillTicksPerSecond;
+                    animComp->skillAnimation->GetBoneTransforms(skillTimeInTicks, m_skillPose);
+
+                    if (animComp->skillFullBody) {
+                        animComp->skeleton->UpdateBoneTransforms(m_skillPose);
+                    } else {
+                        animComp->skeleton->UpdateBoneTransformsLayered(
+                            m_locomotionPose, m_skillPose, &IsUpperBodyNodeName);
+                    }
+                } else {
+                    animComp->skeleton->UpdateBoneTransforms(m_locomotionPose);
+                }
+            } else {
+                animComp->skeleton->UpdateBoneTransforms(m_locomotionPose);
+            }
         } else if (animComp->skeleton && animComp->skeleton->IsLoaded()) {
             animComp->skeleton->ResetToBindPose();
         }

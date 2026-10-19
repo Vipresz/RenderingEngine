@@ -23,14 +23,15 @@ void main()
     vec4 totalPosition = vec4(0.0f);
     
     if (useBones) {
+        float totalWeight = 0.0f;
         for (int i = 0; i < 4; i++) {
-            if (boneIds[i] == -1) continue;
-            if (boneIds[i] >= MAX_BONES) {
-                totalPosition = vec4(pos, 1.0f);
-                break;
-            }
-            vec4 localPosition = gBones[boneIds[i]] * vec4(pos, 1.0f);
-            totalPosition += localPosition * boneWeights[i];
+            if (boneWeights[i] <= 0.0f) continue;
+            if (boneIds[i] < 0 || boneIds[i] >= MAX_BONES) continue;
+            totalPosition += gBones[boneIds[i]] * vec4(pos, 1.0f) * boneWeights[i];
+            totalWeight += boneWeights[i];
+        }
+        if (totalWeight <= 0.0f) {
+            totalPosition = vec4(pos, 1.0f);
         }
     } else {
         totalPosition = vec4(pos, 1.0f);

@@ -24,12 +24,31 @@ FetchContent_MakeAvailable(glm)
 set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/Scene.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/Prefab.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/SceneSpawner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/SceneSerializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CharacterMovementSimulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/PasswordHasher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CryptoSha256.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/SecureCompare.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/UdpMessageAuth.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/UdpDatagramCipher.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/CredentialStore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ScalePolicyConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/LayerInstancePolicy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ReplicationTier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ReplicationTierThrottle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ShardRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/MigrationToken.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ZoneScaleConfig.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/ecs/PlayerItemOwnership.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/ecs/PlayerTrade.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ItemOwnershipReplication.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/TradeReplication.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/TradeSession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../core/network/ChatMessage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/terrain/HeightmapTerrain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/InterestManager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/RateLimiter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ServerAuthority.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/DatagramSocket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/UdpChannel.cpp
@@ -37,10 +56,19 @@ set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetworkConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetClient.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/NetGateway.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/CellLayerAssigner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ShardPopulationReporter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/systems/ReplicationSystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/ItemOwnershipReplicationBinding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/TradeReplicationBinding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/physics/SimplePhysicsWorld.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../platform/audio/NullAudioBackend.cpp
 )
+if(NOT BUILD_ENGINE_PLATFORM)
+    list(APPEND ENGINE_TEST_SUPPORT_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/../platform/network/TlsSession.cpp)
+endif()
 
 add_library(EngineTestSupport STATIC ${ENGINE_TEST_SUPPORT_SOURCES})
 target_include_directories(EngineTestSupport PUBLIC
@@ -49,6 +77,7 @@ target_include_directories(EngineTestSupport PUBLIC
 )
 target_link_libraries(EngineTestSupport PUBLIC Engine glm::glm)
 target_compile_features(EngineTestSupport PUBLIC cxx_std_17)
+target_compile_definitions(EngineTestSupport PUBLIC ENGINE_LOW_COST_PBKDF2)
 
 if(WIN32)
     target_link_libraries(EngineTestSupport PUBLIC ws2_32 winmm)
@@ -61,36 +90,216 @@ set(ENGINE_TEST_SOURCES
     core/ReplicationTypesTest.cpp
     core/ECSTest.cpp
     core/DeterministicMathTest.cpp
+    core/SecurityHardeningTest.cpp
+    core/SecureCompareTest.cpp
+    core/UdpMessageAuthTest.cpp
     scene/SceneTest.cpp
     scene/SceneSerializerTest.cpp
+    scene/SceneSpawnerTest.cpp
     scene/PrefabTest.cpp
     network/InterestManagerTest.cpp
+    network/RateLimiterTest.cpp
     network/ServerAuthorityTest.cpp
     network/SocketTest.cpp
     network/UdpChannelTest.cpp
     network/ReplicationSystemTest.cpp
+    network/ItemOwnershipReplicationBindingTest.cpp
     network/NetServerIntegrationTest.cpp
+    network/PingPongTest.cpp
+    network/LoginEdgeCasesTest.cpp
+    network/NetServerSecurityTest.cpp
+    network/UdpDatagramCipherTest.cpp
+    network/TlsSessionTest.cpp
     network/CharacterMovementSimulatorTest.cpp
     network/ClientPredictionTest.cpp
     core/CredentialStoreTest.cpp
     core/PasswordHasherTest.cpp
     core/LoadoutReplicationTest.cpp
+    core/ItemOwnershipReplicationTest.cpp
+    core/PlayerItemOwnershipComponentTest.cpp
+    core/TradeSessionTest.cpp
+    core/ChatMessageTest.cpp
     core/AuthorityHardeningTest.cpp
+    core/ReplicationTierTest.cpp
+    core/ScalePolicyTest.cpp
+    core/LayerInstancePolicyTest.cpp
+    core/ShardRegistryTest.cpp
+    core/MigrationTokenTest.cpp
+    core/ReplicationTierThrottleTest.cpp
+    core/ZoneScaleConfigTest.cpp
+    network/CellLayerAssignerTest.cpp
+    network/NetGatewayTest.cpp
+    network/TransformBatchTest.cpp
     terrain/HeightmapTerrainTest.cpp
     physics/SimplePhysicsWorldTest.cpp
     audio/NullAudioBackendTest.cpp
+    render/RaycastTest.cpp
+    render/ShadowShaderFilesTest.cpp
+    ui/UILayerTest.cpp
 )
+
+# Suites in this list already run in the platform-off CI jobs. The platform job
+# skips them and runs only the sources appended below, plus TLS cases that are
+# compiled only when ENGINE_ENABLE_TLS is on.
+set(ENGINE_CORE_TEST_SOURCES ${ENGINE_TEST_SOURCES})
+
+if(BUILD_ENGINE_PLATFORM)
+    list(APPEND ENGINE_TEST_SOURCES
+        render/FrustumTest.cpp
+        render/ModelRaycastTest.cpp
+        render/RenderLodSelectionTest.cpp
+        render/AssetManagerTest.cpp
+        render/ModelRaycastWorldTest.cpp
+        render/RenderPipelinePassTest.cpp
+        network/NetworkSystemTest.cpp
+        network/NetworkSystemIntegrationTest.cpp
+        network/NetServerJoinLoadTest.cpp
+        network/NetServerScalePolicyMultiUserTest.cpp
+        network/AuthoritativeGameSimulatorOwnershipTest.cpp
+        network/AuthoritativeGameSimulatorTradeTest.cpp
+        network/AuthoritativeGameSimulatorChannelsTest.cpp
+        network/AuthoritativeGameSimulatorGameplayTest.cpp
+        network/TlsHandshakeTest.cpp)
+    if(DEFINED NUKLEAR_DIR)
+        list(APPEND ENGINE_TEST_SOURCES
+            ui/FontLibraryTest.cpp
+            ui/ItemTooltipLayoutTest.cpp
+            ui/UISystemTest.cpp)
+    endif()
+endif()
 
 add_executable(EngineTests ${ENGINE_TEST_SOURCES})
 target_include_directories(EngineTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(EngineTests PRIVATE
+    ENGINE_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../config"
+)
 target_link_libraries(EngineTests PRIVATE EngineTestSupport GTest::gtest_main)
 target_compile_features(EngineTests PRIVATE cxx_std_17)
+
+if(BUILD_ENGINE_PLATFORM)
+    target_link_libraries(EngineTests PRIVATE Platform)
+    target_compile_definitions(EngineTests PRIVATE ENGINE_PLATFORM_TESTS)
+    if(DEFINED NUKLEAR_DIR)
+        target_compile_definitions(EngineTests PRIVATE PLATFORM_HAS_NUKLEAR)
+        target_include_directories(EngineTests PRIVATE ${NUKLEAR_DIR} ${NUKLEAR_DIR}/demo/glfw_opengl3)
+    endif()
+endif()
+
+if(ENGINE_ENABLE_TLS)
+    target_compile_definitions(EngineTestSupport PUBLIC ENGINE_ENABLE_TLS)
+    target_link_libraries(EngineTestSupport PUBLIC mbedtls)
+    target_link_libraries(EngineTests PRIVATE mbedtls)
+endif()
+
 set_target_properties(EngineTests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
+if(BUILD_ENGINE_PLATFORM)
+    file(GLOB ENGINE_TEST_SHADER_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../platform/render/shaders/*.vert"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../platform/render/shaders/*.frag")
+    foreach(SHADER ${ENGINE_TEST_SHADER_FILES})
+        get_filename_component(SHADER_NAME ${SHADER} NAME)
+        add_custom_command(TARGET EngineTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:EngineTests>/shaders"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SHADER}"
+                "$<TARGET_FILE_DIR:EngineTests>/shaders/${SHADER_NAME}"
+            COMMENT "Copying shader ${SHADER_NAME} for EngineTests"
+        )
+    endforeach()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tls/test_server.crt")
+        add_custom_command(TARGET EngineTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:EngineTests>/fixtures/tls"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tls/test_server.crt"
+                "$<TARGET_FILE_DIR:EngineTests>/fixtures/tls/test_server.crt"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tls/test_server.key"
+                "$<TARGET_FILE_DIR:EngineTests>/fixtures/tls/test_server.key"
+            COMMENT "Copying TLS fixtures for EngineTests"
+        )
+    endif()
+
+    if(WIN32)
+        # Platform tests link GLFW/GLEW dynamically; copy runtime DLLs beside EngineTests.exe so
+        # gtest discovery and ctest can launch the binary on Windows CI runners.
+        if(TARGET glfw)
+            add_custom_command(TARGET EngineTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:glfw>"
+                    "$<TARGET_FILE_DIR:EngineTests>"
+                COMMENT "Copying GLFW DLL for EngineTests")
+        endif()
+        if(DEFINED ENGINE_GLEW_RUNTIME_DLL AND EXISTS "${ENGINE_GLEW_RUNTIME_DLL}")
+            add_custom_command(TARGET EngineTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ENGINE_GLEW_RUNTIME_DLL}"
+                    "$<TARGET_FILE_DIR:EngineTests>"
+                COMMENT "Copying GLEW DLL for EngineTests")
+        endif()
+        if(TARGET assimp)
+            get_target_property(_engine_assimp_type assimp TYPE)
+            if(_engine_assimp_type STREQUAL "SHARED_LIBRARY")
+                add_custom_command(TARGET EngineTests POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<TARGET_FILE:assimp>"
+                        "$<TARGET_FILE_DIR:EngineTests>"
+                    COMMENT "Copying Assimp DLL for EngineTests")
+            endif()
+        endif()
+    endif()
+endif()
+
+# gtest filter for suites the core CI jobs already execute. TlsSessionTest's
+# certificate cases are inside ENGINE_ENABLE_TLS, so only the always-on case is
+# listed here; the rest stay on the platform run.
+function(engine_core_gtest_filter out_var)
+    set(suites "")
+    foreach(src IN LISTS ENGINE_CORE_TEST_SOURCES)
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${src}" contents)
+        string(REGEX MATCHALL "(TEST|TEST_F|TEST_P)\\([ \t\r\n]*[A-Za-z_][A-Za-z0-9_]*" hits "${contents}")
+        foreach(hit IN LISTS hits)
+            string(REGEX REPLACE "^[A-Z_]+\\([ \t\r\n]*" "" suite "${hit}")
+            if(suite STREQUAL "TlsSessionTest")
+                continue()
+            endif()
+            list(APPEND suites "${suite}")
+        endforeach()
+    endforeach()
+    if(NOT suites)
+        message(FATAL_ERROR "Failed to collect core gtest suite names")
+    endif()
+    list(REMOVE_DUPLICATES suites)
+    set(patterns "")
+    foreach(suite IN LISTS suites)
+        list(APPEND patterns "${suite}.*")
+    endforeach()
+    list(APPEND patterns "TlsSessionTest.DisabledConfigDoesNotInitialize")
+    list(JOIN patterns ":" joined)
+    set(${out_var} "${joined}" PARENT_SCOPE)
+endfunction()
+
 include(GoogleTest)
-gtest_discover_tests(EngineTests DISCOVERY_MODE PRE_TEST)
+if(BUILD_ENGINE_PLATFORM)
+    engine_core_gtest_filter(_engine_core_gtest_filter)
+    # Discover at build time after runtime DLLs are copied (PRE_TEST fails with 0xc0000135 on CI).
+    # Split labels so test-platform-windows can run -L platform and skip the core suite.
+    gtest_discover_tests(EngineTests
+        DISCOVERY_MODE POST_BUILD
+        TEST_FILTER "${_engine_core_gtest_filter}"
+        TEST_LIST EngineCoreTests
+        PROPERTIES LABELS "core")
+    gtest_discover_tests(EngineTests
+        DISCOVERY_MODE POST_BUILD
+        TEST_FILTER "-${_engine_core_gtest_filter}"
+        TEST_LIST EnginePlatformTests
+        PROPERTIES LABELS "platform")
+else()
+    gtest_discover_tests(EngineTests DISCOVERY_MODE PRE_TEST)
+endif()
 
 # Fallback so `ctest` always has at least one entry if discovery is stale on MSVC.
 add_test(NAME EngineTests COMMAND EngineTests)

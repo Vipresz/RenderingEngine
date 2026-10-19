@@ -5,6 +5,7 @@
 #include "network/systems/ReplicationSystem.h"
 #include "render/components/TransformComponent.h"
 #include "render/components/AnimationComponent.h"
+#include "physics/components/ColliderComponent.h"
 
 #include <glm/glm.hpp>
 
@@ -42,6 +43,77 @@ TEST(ReplicationSystemTest, BuildAndApplyTransformSnapshot) {
     EXPECT_FLOAT_EQ(applied->rotation.y, 20.0f);
     // Networked transform must not overwrite presentation scale.
     EXPECT_FLOAT_EQ(applied->scale.z, 0.08f);
+}
+
+TEST(ReplicationSystemTest, BuildAndApplyAnimationSnapshotWithPlaybackFields) {
+    Registry registry;
+    ReplicationSystem replication;
+
+    const EntityID entity = registry.CreateEntity().id;
+    auto& anim = registry.AddComponent<Engine::Platform::Render::Components::AnimationComponent>(entity);
+    anim.currentState = Engine::Platform::Render::Components::AnimationComponent::AnimationState::Running;
+    anim.isJumping = true;
+    anim.isRunning = true;
+    anim.currentAnimationTime = 1.25f;
+    anim.locomotionSpeed = 4.5f;
+    anim.isLooping = false;
+    anim.jumpAnimationActive = true;
+    anim.landingActive = true;
+    anim.airVelocityX = 1.0f;
+    anim.airVelocityZ = -2.0f;
+    registry.AddComponent<TransformComponent>(entity);
+
+    replication.RegisterReplicatedEntity(7, entity);
+    const Engine::Net::EntitySnapshot built = replication.BuildEntitySnapshot(7, registry, 50);
+    const Engine::Net::ComponentSnapshot* animationSnapshot = nullptr;
+    for (const Engine::Net::ComponentSnapshot& component : built.components) {
+        if (component.componentId == Engine::Net::kAnimationReplicationComponent) {
+            animationSnapshot = &component;
+            break;
+        }
+    }
+    ASSERT_NE(animationSnapshot, nullptr);
+
+    anim.currentAnimationTime = 0.0f;
+    anim.locomotionSpeed = 0.0f;
+    replication.ApplyEntitySnapshot(built, registry);
+
+    const auto* applied = registry.GetComponent<Engine::Platform::Render::Components::AnimationComponent>(entity);
+    ASSERT_NE(applied, nullptr);
+    EXPECT_FLOAT_EQ(applied->currentAnimationTime, 1.25f);
+    EXPECT_FLOAT_EQ(applied->locomotionSpeed, 4.5f);
+    EXPECT_FALSE(applied->isLooping);
+    EXPECT_TRUE(applied->landingActive);
+    EXPECT_FLOAT_EQ(applied->airVelocityX, 1.0f);
+    EXPECT_FLOAT_EQ(applied->airVelocityZ, -2.0f);
+}
+
+TEST(ReplicationSystemTest, BuildAndApplyColliderSnapshot) {
+    Registry registry;
+    ReplicationSystem replication;
+
+    const EntityID entity = registry.CreateEntity().id;
+    auto& collider = registry.AddComponent<Engine::Physics::Components::ColliderComponent>(entity);
+    collider.localBounds.min = glm::vec3(-1.0f, 0.0f, -1.0f);
+    collider.localBounds.max = glm::vec3(1.0f, 2.0f, 1.0f);
+    collider.isStatic = true;
+    collider.useGravity = false;
+    collider.velocity = glm::vec3(0.5f, 0.0f, -0.25f);
+    registry.AddComponent<TransformComponent>(entity);
+
+    replication.RegisterReplicatedEntity(9, entity);
+    const Engine::Net::EntitySnapshot built = replication.BuildEntitySnapshot(9, registry, 1);
+
+    collider.velocity = glm::vec3(0.0f);
+    collider.isStatic = false;
+    replication.ApplyEntitySnapshot(built, registry);
+
+    const auto* applied = registry.GetComponent<Engine::Physics::Components::ColliderComponent>(entity);
+    ASSERT_NE(applied, nullptr);
+    EXPECT_TRUE(applied->isStatic);
+    EXPECT_FALSE(applied->useGravity);
+    EXPECT_FLOAT_EQ(applied->velocity.x, 0.5f);
+    EXPECT_FLOAT_EQ(applied->localBounds.max.y, 2.0f);
 }
 
 TEST(ReplicationSystemTest, PeriodicSendInvokesHandler) {

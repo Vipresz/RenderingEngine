@@ -81,6 +81,9 @@ bool NuklearUI::Initialize(GLFWwindow* window, FontLibrary* fontLibrary) {
         m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiRegular, defaultPlayFont);
     }
 #endif
+    if (m_fontLibrary) {
+        m_fontLibrary->LoadChatFont(atlas);
+    }
     nk_glfw3_font_stash_end(m_nuklear);
     if (m_fontLibrary) {
         m_fontLibrary->ApplyDefaultFont(m_nkContext);

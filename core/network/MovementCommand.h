@@ -11,6 +11,11 @@ namespace Net {
 
 constexpr const char* kMovementCommandChannel = "movement";
 constexpr const char* kLoadoutChannel = "loadout";
+constexpr const char* kItemOwnershipChannel = "item_ownership";
+constexpr const char* kInventoryActionChannel = "inventory_action";
+constexpr const char* kTradeChannel = "trade";
+constexpr const char* kChatChannel = "chat";
+constexpr const char* kWorldResyncChannel = "world_resync";
 
 // Fallback defaults when a game/server hasn't loaded character_stats.json yet.
 constexpr float kAuthoritativeWalkSpeed = 2.8f;

@@ -1,7 +1,9 @@
 #include "render/passes/ShadowRenderPass.h"
 
 #include "Logger.h"
+#include "render/passes/RenderPassMeshDraw.h"
 #include "render/components/AnimationComponent.h"
+#include "render/components/TransformComponent.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
@@ -66,8 +68,9 @@ void ShadowRenderPass::EnsureResources() {
     m_depthShader.SetWarnOnMissingUniforms(false);
     m_depthShader.CreateFromFiles("shaders/shadow_depth.vert", "shaders/shadow_depth.frag");
     if (!m_depthShader.IsValid()) {
-        LOG_WARNING("ShadowRenderPass",
-                    "shadow_depth shader failed to load — directional shadows disabled (check shaders/shadow_depth.*)");
+        LOG_ERROR("ShadowRenderPass",
+                  "shadow_depth shader failed to load — directional shadows disabled (check shaders/shadow_depth.*)");
+        m_shaderLoadFailed = true;
         return;
     }
 
@@ -108,7 +111,16 @@ glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context
         }
     }
 
-    const float halfExtent = 55.0f;
+    float halfExtent = 55.0f;
+    glm::vec3 sceneMin;
+    glm::vec3 sceneMax;
+    if (TryComputeVisibleSceneBounds(context, sceneMin, sceneMax)) {
+        focusCenter = (sceneMin + sceneMax) * 0.5f;
+        const glm::vec3 sceneHalf = (sceneMax - sceneMin) * 0.5f;
+        halfExtent = std::max({sceneHalf.x, sceneHalf.y, sceneHalf.z, 5.0f});
+        halfExtent = std::min(halfExtent + 4.0f, 80.0f);
+    }
+
     const float zPadding = 25.0f;
     const glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
     const glm::vec3 lightPos = focusCenter - lightDir * 80.0f;
@@ -148,6 +160,54 @@ glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context
     return lightProjection * lightView;
 }
 
+bool ShadowRenderPass::TryComputeVisibleSceneBounds(const RenderContext& context,
+                                                   glm::vec3& outMin,
+                                                   glm::vec3& outMax) const {
+    if (!context.registry) {
+        return false;
+    }
+
+    std::vector<MeshDrawItem> items;
+    CollectMeshDrawItems(*context.registry, context, false, items);
+    if (items.empty()) {
+        return false;
+    }
+
+    outMin = glm::vec3(std::numeric_limits<float>::max());
+    outMax = glm::vec3(std::numeric_limits<float>::lowest());
+    bool found = false;
+
+    for (const MeshDrawItem& item : items) {
+        const auto* transformComp =
+            context.registry->GetComponent<Engine::Platform::Render::Components::TransformComponent>(
+                item.entityID);
+        if (!transformComp || item.model == nullptr) {
+            continue;
+        }
+
+        float minX = 0.0f;
+        float maxX = 0.0f;
+        float minY = 0.0f;
+        float maxY = 0.0f;
+        float minZ = 0.0f;
+        float maxZ = 0.0f;
+        item.model->GetBounds(minX, maxX, minY, maxY, minZ, maxZ);
+        const glm::mat4 modelMatrix = transformComp->GetMatrix();
+        const glm::vec3 corners[8] = {
+            {minX, minY, minZ}, {maxX, minY, minZ}, {minX, maxY, minZ}, {maxX, maxY, minZ},
+            {minX, minY, maxZ}, {maxX, minY, maxZ}, {minX, maxY, maxZ}, {maxX, maxY, maxZ},
+        };
+        for (const glm::vec3& corner : corners) {
+            const glm::vec3 worldCorner = glm::vec3(modelMatrix * glm::vec4(corner, 1.0f));
+            outMin = glm::min(outMin, worldCorner);
+            outMax = glm::max(outMax, worldCorner);
+            found = true;
+        }
+    }
+
+    return found;
+}
+
 void ShadowRenderPass::RenderShadowCasters(RenderContext& context, const glm::mat4& lightSpaceMatrix) {
     if (!context.registry || !m_depthShader.IsValid()) {
         return;
@@ -162,14 +222,13 @@ void ShadowRenderPass::RenderShadowCasters(RenderContext& context, const glm::ma
     }
 
     using Components::AnimationComponent;
-    using Components::MeshComponent;
     using Components::TransformComponent;
-
-    auto entities = context.registry->View<MeshComponent, TransformComponent>();
-    for (EntityID entityID : entities) {
-        const MeshComponent* meshComp = context.registry->GetComponent<MeshComponent>(entityID);
-        const TransformComponent* transformComp = context.registry->GetComponent<TransformComponent>(entityID);
-        if (!meshComp || !transformComp || !meshComp->IsLoaded() || !meshComp->model) {
+    std::vector<MeshDrawItem> casters;
+    CollectMeshDrawItems(*context.registry, context, false, casters);
+    for (const MeshDrawItem& item : casters) {
+        const TransformComponent* transformComp =
+            context.registry->GetComponent<TransformComponent>(item.entityID);
+        if (!transformComp || item.model == nullptr) {
             continue;
         }
 
@@ -178,15 +237,24 @@ void ShadowRenderPass::RenderShadowCasters(RenderContext& context, const glm::ma
             glUniformMatrix4fv(uniformModel, 1, GL_FALSE, glm::value_ptr(modelMatrix));
         }
 
-        const AnimationComponent* animComp = context.registry->GetComponent<AnimationComponent>(entityID);
+        const AnimationComponent* animComp =
+            context.registry->GetComponent<AnimationComponent>(item.entityID);
         UploadBoneUniforms(shaderProgramID, animComp ? animComp->skeleton : nullptr);
-        meshComp->model->RenderModel();
+        item.model->RenderModel();
     }
 }
 
 void ShadowRenderPass::Execute(RenderContext& context) {
     EnsureResources();
-    if (!m_initialized || !context.shader) {
+    if (!AreShadowsEnabled() || !context.shader) {
+        if (m_shaderLoadFailed) {
+            static bool loggedOnce = false;
+            if (!loggedOnce) {
+                loggedOnce = true;
+                LOG_WARNING("ShadowRenderPass",
+                            "Directional shadows disabled — shadow_depth shaders failed to load");
+            }
+        }
         return;
     }
 

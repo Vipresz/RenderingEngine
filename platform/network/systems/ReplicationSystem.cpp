@@ -1,6 +1,8 @@
 #include "network/systems/ReplicationSystem.h"
 
 #include "Logger.h"
+#include "core/network/ColliderReplication.h"
+#include "physics/components/ColliderComponent.h"
 #include "render/components/AnimationComponent.h"
 #include "render/components/TransformComponent.h"
 
@@ -11,8 +13,57 @@ namespace Systems {
 
 using Engine::Platform::Render::Components::AnimationComponent;
 using Engine::Platform::Render::Components::TransformComponent;
+using Engine::Physics::Components::ColliderComponent;
 
 namespace {
+
+void WriteAnimationReplicationBlob(const AnimationComponent& anim, Engine::Net::NetBuffer& out) {
+    out.WriteU8(static_cast<uint8_t>(anim.currentState));
+    out.WriteU8(anim.isJumping ? 1 : 0);
+    out.WriteU8(anim.isRunning ? 1 : 0);
+    out.WriteFloat(anim.currentAnimationTime);
+    out.WriteFloat(anim.locomotionSpeed);
+    out.WriteU8(anim.isLooping ? 1 : 0);
+    out.WriteU8(anim.jumpAnimationActive ? 1 : 0);
+    out.WriteU8(anim.landingActive ? 1 : 0);
+    out.WriteFloat(anim.airVelocityX);
+    out.WriteFloat(anim.airVelocityZ);
+}
+
+bool ReadAnimationReplicationBlob(const Engine::Net::NetBuffer& in, AnimationComponent& anim) {
+    Engine::Net::NetBuffer copy = in;
+    copy.ResetRead();
+    uint8_t state = 0;
+    uint8_t jumping = 0;
+    uint8_t running = 0;
+    if (!copy.ReadU8(state) || !copy.ReadU8(jumping) || !copy.ReadU8(running)) {
+        return false;
+    }
+    anim.currentState = static_cast<AnimationComponent::AnimationState>(state);
+    anim.isJumping = jumping != 0;
+    anim.isRunning = running != 0;
+
+    float clipTime = 0.0f;
+    float locomotionSpeed = 0.0f;
+    uint8_t looping = 1;
+    uint8_t jumpAnim = 0;
+    uint8_t landing = 0;
+    float airX = 0.0f;
+    float airZ = 0.0f;
+    if (!copy.ReadFloat(clipTime) || !copy.ReadFloat(locomotionSpeed) || !copy.ReadU8(looping) ||
+        !copy.ReadU8(jumpAnim) || !copy.ReadU8(landing) || !copy.ReadFloat(airX) ||
+        !copy.ReadFloat(airZ)) {
+        return true;
+    }
+    anim.currentAnimationTime = clipTime;
+    anim.locomotionSpeed = locomotionSpeed;
+    anim.isLooping = looping != 0;
+    anim.jumpAnimationActive = jumpAnim != 0;
+    anim.landingActive = landing != 0;
+    anim.airVelocityX = airX;
+    anim.airVelocityZ = airZ;
+    return true;
+}
 
 void RegisterDefaultReplicators(Engine::Net::ReplicationRegistry& registry) {
     Engine::Net::ReplicationComponentDescriptor transformDesc;
@@ -58,28 +109,27 @@ void RegisterDefaultReplicators(Engine::Net::ReplicationRegistry& registry) {
     animationDesc.id = Engine::Net::kAnimationReplicationComponent;
     animationDesc.name = "Animation";
     animationDesc.serialize = [](const void* component, Engine::Net::NetBuffer& out) {
-        const auto* anim = static_cast<const AnimationComponent*>(component);
-        out.WriteU8(static_cast<uint8_t>(anim->currentState));
-        out.WriteU8(anim->isJumping ? 1 : 0);
-        out.WriteU8(anim->isRunning ? 1 : 0);
+        WriteAnimationReplicationBlob(*static_cast<const AnimationComponent*>(component), out);
         return true;
     };
     animationDesc.deserialize = [](const Engine::Net::NetBuffer& in, void* component) {
-        auto* anim = static_cast<AnimationComponent*>(component);
-        Engine::Net::NetBuffer copy = in;
-        copy.ResetRead();
-        uint8_t state = 0;
-        uint8_t jumping = 0;
-        uint8_t running = 0;
-        if (!copy.ReadU8(state) || !copy.ReadU8(jumping) || !copy.ReadU8(running)) {
-            return false;
-        }
-        anim->currentState = static_cast<AnimationComponent::AnimationState>(state);
-        anim->isJumping = jumping != 0;
-        anim->isRunning = running != 0;
-        return true;
+        return ReadAnimationReplicationBlob(in, *static_cast<AnimationComponent*>(component));
     };
     registry.Register(std::move(animationDesc));
+
+    Engine::Net::ReplicationComponentDescriptor colliderDesc;
+    colliderDesc.id = Engine::Net::kColliderReplicationComponent;
+    colliderDesc.name = "Collider";
+    colliderDesc.serialize = [](const void* component, Engine::Net::NetBuffer& out) {
+        out = Engine::Net::SerializeColliderReplication(
+            *static_cast<const ColliderComponent*>(component));
+        return true;
+    };
+    colliderDesc.deserialize = [](const Engine::Net::NetBuffer& in, void* component) {
+        return Engine::Net::DeserializeColliderReplication(in,
+                                                            *static_cast<ColliderComponent*>(component));
+    };
+    registry.Register(std::move(colliderDesc));
 }
 
 } // namespace
@@ -150,9 +200,7 @@ void ReplicationSystem::RegisterBuiltInBindings() {
             if (!anim) {
                 return false;
             }
-            out.WriteU8(static_cast<uint8_t>(anim->currentState));
-            out.WriteU8(anim->isJumping ? 1 : 0);
-            out.WriteU8(anim->isRunning ? 1 : 0);
+            WriteAnimationReplicationBlob(*anim, out);
             return true;
         },
         [](EntityID entity, ECS::Registry& registry, const Engine::Net::NetBuffer& in) {
@@ -160,18 +208,25 @@ void ReplicationSystem::RegisterBuiltInBindings() {
             if (!anim) {
                 anim = &registry.AddComponent<AnimationComponent>(entity);
             }
-            Engine::Net::NetBuffer copy = in;
-            copy.ResetRead();
-            uint8_t state = 0;
-            uint8_t jumping = 0;
-            uint8_t running = 0;
-            if (!copy.ReadU8(state) || !copy.ReadU8(jumping) || !copy.ReadU8(running)) {
+            return ReadAnimationReplicationBlob(in, *anim);
+        }});
+
+    RegisterComponentBinding(ReplicationComponentBinding{
+        Engine::Net::kColliderReplicationComponent,
+        [](EntityID entity, ECS::Registry& registry, Engine::Net::NetBuffer& out) {
+            const ColliderComponent* collider = registry.GetComponent<ColliderComponent>(entity);
+            if (!collider) {
                 return false;
             }
-            anim->currentState = static_cast<AnimationComponent::AnimationState>(state);
-            anim->isJumping = jumping != 0;
-            anim->isRunning = running != 0;
+            out = Engine::Net::SerializeColliderReplication(*collider);
             return true;
+        },
+        [](EntityID entity, ECS::Registry& registry, const Engine::Net::NetBuffer& in) {
+            ColliderComponent* collider = registry.GetComponent<ColliderComponent>(entity);
+            if (!collider) {
+                collider = &registry.AddComponent<ColliderComponent>(entity);
+            }
+            return Engine::Net::DeserializeColliderReplication(in, *collider);
         }});
 }
 

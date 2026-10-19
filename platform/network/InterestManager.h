@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -19,13 +20,26 @@ class InterestManager {
 public:
     explicit InterestManager(float cellSize = 32.0f, float defaultInterestRadius = 128.0f);
 
+    InterestManager(const InterestManager&) = delete;
+    InterestManager& operator=(const InterestManager&) = delete;
+
     void SetCellSize(float cellSize);
     void SetDefaultInterestRadius(float radius);
+    float GetDefaultInterestRadius() const { return m_defaultInterestRadius; }
+
+    void SetMaxObserversPerBroadcast(size_t maxObservers);
+    size_t GetMaxObserversPerBroadcast() const { return m_maxObserversPerBroadcast; }
+    float GetCellSize() const { return m_cellSize; }
 
     void UpdateEntity(Engine::Net::UserId userId, const glm::vec3& position);
     void RemoveEntity(Engine::Net::UserId userId);
+    void Clear();
 
-    // Returns user IDs that should receive updates about `sourceUserId` from `observerPosition`.
+    bool TryGetEntityPosition(Engine::Net::UserId userId, glm::vec3& outPosition) const;
+    size_t CountUsersInCell(const glm::vec3& position) const;
+    uint32_t GetMaxCellDensity() const;
+
+    // Returns user IDs that should receive updates about `sourceUserId` from `sourcePosition`.
     std::vector<Engine::Net::UserId> GetInterestedObservers(Engine::Net::UserId sourceUserId,
                                                             const glm::vec3& sourcePosition) const;
 
@@ -54,8 +68,12 @@ private:
     };
 
     CellKey ToCell(const glm::vec3& position) const;
+    void RebuildSpatialIndex();
+
+    mutable std::mutex m_mutex;
     float m_cellSize = 32.0f;
     float m_defaultInterestRadius = 128.0f;
+    size_t m_maxObserversPerBroadcast = 64;
     std::unordered_map<Engine::Net::UserId, glm::vec3> m_positions;
     std::unordered_map<CellKey, std::unordered_set<Engine::Net::UserId>, CellKeyHash> m_cells;
 };

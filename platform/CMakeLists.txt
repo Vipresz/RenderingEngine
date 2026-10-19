@@ -15,6 +15,7 @@ set(PLATFORM_SOURCES
     render/FollowCamera.cpp
     render/Model.cpp
     render/MeshAssetResolve.cpp
+    render/Frustum.cpp
     render/AssetManager.cpp
     render/Animation.cpp
     render/Skeleton.cpp
@@ -22,6 +23,7 @@ set(PLATFORM_SOURCES
     render/passes/ShadowRenderPass.cpp
     render/passes/OpaqueRenderPass.cpp
     render/passes/TransparentRenderPass.cpp
+    render/passes/RenderPassMeshDraw.cpp
     render/systems/RenderSystem.cpp
     render/systems/AnimationSystem.cpp
     render/systems/CameraSystem.cpp
@@ -30,17 +32,40 @@ set(PLATFORM_SOURCES
     network/DatagramSocket.cpp
     network/UdpChannel.cpp
     network/InterestManager.cpp
+    network/RateLimiter.cpp
     network/ServerAuthority.cpp
     network/NetworkConnection.cpp
     network/NetClient.cpp
     network/NetServer.cpp
+    network/NetGateway.cpp
+    network/CellLayerAssigner.cpp
+    network/ShardPopulationReporter.cpp
     network/TlsSession.cpp
     network/AuthoritativeGameSimulator.cpp
+    network/ItemOwnershipReplicationBinding.cpp
+    network/TradeReplicationBinding.cpp
     network/systems/NetworkSystem.cpp
     network/systems/ReplicationSystem.cpp
+    ../core/ecs/PlayerItemOwnership.cpp
+    ../core/ecs/PlayerTrade.cpp
+    ../core/network/ItemOwnershipReplication.cpp
+    ../core/network/TradeReplication.cpp
+    ../core/network/TradeSession.cpp
+    ../core/network/ChatMessage.cpp
     ../core/network/CharacterMovementSimulator.cpp
+    ../core/network/CryptoSha256.cpp
+    ../core/network/SecureCompare.cpp
+    ../core/network/UdpMessageAuth.cpp
+    ../core/network/UdpDatagramCipher.cpp
     ../core/network/PasswordHasher.cpp
     ../core/network/CredentialStore.cpp
+    ../core/network/ScalePolicyConfig.cpp
+    ../core/network/LayerInstancePolicy.cpp
+    ../core/network/ReplicationTier.cpp
+    ../core/network/ReplicationTierThrottle.cpp
+    ../core/network/ShardRegistry.cpp
+    ../core/network/MigrationToken.cpp
+    ../core/network/ZoneScaleConfig.cpp
     ../core/terrain/HeightmapTerrain.cpp
     ../core/terrain/HeightmapTerrainImage.cpp
     physics/SimplePhysicsWorld.cpp
@@ -49,6 +74,7 @@ set(PLATFORM_SOURCES
     audio/AudioSystem.cpp
     ../core/scene/Scene.cpp
     ../core/scene/Prefab.cpp
+    ../core/scene/SceneSpawner.cpp
     ../core/scene/SceneSerializer.cpp
 )
 
@@ -67,6 +93,8 @@ if(DEFINED NUKLEAR_DIR)
         ui/Minimap.cpp
         ui/MenuStyle.cpp
         ui/FontLibrary.cpp
+        ui/ItemTooltip.cpp
+        ui/DecisionPrompt.cpp
         ui/UISystem.cpp
     )
 endif()
@@ -94,18 +122,31 @@ target_compile_features(Platform PUBLIC cxx_std_17)
 # Link to engine (platform layer uses engine)
 target_link_libraries(Platform PUBLIC Engine)
 
-option(ENGINE_ENABLE_TLS "Enable mbedTLS for encrypted TCP connections" OFF)
+if(BUILD_ENGINE_PLATFORM)
+    set(_ENGINE_TLS_DEFAULT ON)
+else()
+    set(_ENGINE_TLS_DEFAULT OFF)
+endif()
+option(ENGINE_ENABLE_TLS "Enable mbedTLS for encrypted TCP connections" ${_ENGINE_TLS_DEFAULT})
 if(ENGINE_ENABLE_TLS)
     include(FetchContent)
     FetchContent_Declare(
         mbedtls
         GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
-        GIT_TAG v3.6.0
+        GIT_TAG v3.6.2
         GIT_SHALLOW TRUE
     )
     set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
     set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(mbedtls)
+    if(MSVC)
+        # GameEngine root adds /W4 globally; mbedTLS PSA headers use zero-length arrays (C4200).
+        foreach(_mbedtls_tgt mbedcrypto mbedx509 mbedtls p256m everest)
+            if(TARGET ${_mbedtls_tgt})
+                target_compile_options(${_mbedtls_tgt} PRIVATE /wd4200 /wd4244 /WX-)
+            endif()
+        endforeach()
+    endif()
     target_link_libraries(Platform PRIVATE mbedtls)
     target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_TLS)
     message(STATUS "TLS enabled via mbedTLS")
@@ -488,6 +529,11 @@ endif()
 
 if(NOT ASSIMP_FOUND_LOCAL)
     message(WARNING "Assimp not found - model loading will not be available")
+endif()
+
+# Expose GLEW runtime path for test executables (gtest discovery runs EngineTests.exe).
+if(WIN32 AND DEFINED GLEW_DLL_DIR AND EXISTS "${GLEW_DLL_DIR}/glew32.dll")
+    set(ENGINE_GLEW_RUNTIME_DLL "${GLEW_DLL_DIR}/glew32.dll" PARENT_SCOPE)
 endif()
 
 # Platform-specific libraries

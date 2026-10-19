@@ -4,7 +4,16 @@
 #include "core/network/NetworkPayloads.h"
 #include "core/network/ReplicationTypes.h"
 #include "core/network/CredentialStore.h"
+#include "core/network/ServerSecurityPolicy.h"
+#include "core/network/MovementCommand.h"
+#include "core/network/ShardConfig.h"
+#include "core/network/LayerInstancePolicy.h"
+#include "core/network/ScalePolicyConfig.h"
+#include "core/network/ReplicationTier.h"
+#include "core/network/ZoneScaleConfig.h"
 #include "network/InterestManager.h"
+#include "network/CellLayerAssigner.h"
+#include "network/RateLimiter.h"
 #include "network/TlsSession.h"
 #include "network/MessageQueue.h"
 #include "network/NetworkConnection.h"
@@ -14,6 +23,8 @@
 #include <glm/glm.hpp>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -30,8 +41,8 @@ struct ConnectedClient {
     Engine::Net::UserId userId = Engine::Net::kInvalidUserId;
     std::string displayName;
     uint64_t udpSessionToken = 0;
+    bool loggedIn = false;
     std::unique_ptr<NetworkConnection> connection;
-    std::thread receiveThread;
 };
 
 class NetServer {
@@ -48,12 +59,27 @@ public:
     void SetRequiredAuthToken(std::string token) { m_requiredAuthToken = std::move(token); }
     const std::string& GetRequiredAuthToken() const { return m_requiredAuthToken; }
 
+    void SetSecurityPolicy(const Engine::Net::ServerSecurityPolicy& policy) { m_securityPolicy = policy; }
+    Engine::Net::ServerSecurityPolicy& GetSecurityPolicy() { return m_securityPolicy; }
+    const Engine::Net::ServerSecurityPolicy& GetSecurityPolicy() const { return m_securityPolicy; }
+
     Engine::Net::CredentialStore& GetCredentialStore() { return m_credentialStore; }
     const Engine::Net::CredentialStore& GetCredentialStore() const { return m_credentialStore; }
     void SetTlsConfig(const TlsConfig& config) { m_tlsConfig = config; }
 
+    void SetShardConfig(const Engine::Net::ShardConfig& config);
+    const Engine::Net::ShardConfig& GetShardConfig() const { return m_shardConfig; }
+    void SetScalePolicyConfig(const Engine::Net::ScalePolicyConfig& config);
+    const Engine::Net::ScalePolicyConfig& GetScalePolicyConfig() const { return m_scalePolicy; }
+    void ApplyZoneScaleConfig(const Engine::Net::ZoneScaleConfig& config);
+    void ApplyLayeringState(bool layeringActive);
+    void SetObservedTickP95Ms(float tickP95Ms);
+    float GetObservedTickP95Ms() const;
+    bool IsLayeringActive() const { return m_layeringActive.load(std::memory_order_acquire); }
+
     bool IsRunning() const { return m_running; }
     size_t GetClientCount() const;
+    size_t GetLoggedInClientCount() const;
 
     InterestManager& GetInterestManager() { return m_interestManager; }
     const InterestManager& GetInterestManager() const { return m_interestManager; }
@@ -72,6 +98,21 @@ public:
                                      const glm::vec3& sourcePosition,
                                      Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
     bool SendPacketToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
+    void SendTransformToInterested(const Engine::Net::TransformStatePayload& transform,
+                                   Engine::Net::UserId sourceUserId,
+                                   Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    bool SendAuthoritativeSelfTransform(Engine::Net::UserId sourceUserId,
+                                        const Engine::Net::TransformStatePayload& transform);
+    void EnqueueSelfTransform(Engine::Net::UserId sourceUserId,
+                              const Engine::Net::TransformStatePayload& transform);
+    size_t FlushPendingSelfTransforms(size_t maxSends);
+    bool SendMovementAck(Engine::Net::UserId userId, uint64_t tick);
+    void EnqueueTransformToPeers(const Engine::Net::TransformStatePayload& transform,
+                                 Engine::Net::UserId sourceUserId,
+                                 Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
+    size_t FlushPendingPeerTransforms(size_t maxSends);
+    size_t GetReplicationQueueDepth() const;
+    void SendInterestFilteredJoinState(Engine::Net::UserId userId, const glm::vec3& observerPosition);
     void StoreAuthoritativeTransform(Engine::Net::UserId userId,
                                      const Engine::Net::TransformStatePayload& transform);
     void ClearClientWorldState(Engine::Net::UserId userId);
@@ -79,6 +120,7 @@ public:
     using ClientLoggedInCallback = std::function<void(Engine::Net::UserId, const std::string& displayName)>;
     using ClientDisconnectedCallback = std::function<void(Engine::Net::UserId)>;
     using GenericDataInterceptor = std::function<bool(Engine::Net::UserId, Engine::Net::GenericDataPayload&)>;
+    using MovementCommandInterceptor = std::function<bool(Engine::Net::UserId, Engine::Net::MovementCommand&)>;
 
     void SetClientLoggedInCallback(ClientLoggedInCallback callback) {
         m_clientLoggedInCallback = std::move(callback);
@@ -89,38 +131,86 @@ public:
     void SetGenericDataInterceptor(GenericDataInterceptor interceptor) {
         m_genericDataInterceptor = std::move(interceptor);
     }
+    void SetMovementCommandInterceptor(MovementCommandInterceptor interceptor) {
+        m_movementCommandInterceptor = std::move(interceptor);
+    }
     void SetAuthoritativeMode(bool enabled) { m_authoritativeMode = enabled; }
     bool IsAuthoritativeMode() const { return m_authoritativeMode; }
 
+    void SetMovementRateLimit(float commandsPerSecond, float burstCapacity);
+    uint32_t ConsumeMovementCommandsDropped();
+    void SetLoginRateLimit(float loginsPerSecond, float burstCapacity);
+    uint32_t ConsumeLoginAttemptsDropped();
+
+    void SetOverflowLayerPopulation(uint32_t playerCount);
+    uint32_t GetOverflowLayerPopulation() const;
+    Engine::Net::LayerSplitPlan GetLayerSplitPlan() const;
+    bool TryExecuteLayerSplit(const std::function<void(Engine::Net::UserId)>& onPlayerMigrated);
+
+    void SetReplicationTickNumber(uint64_t tickNumber);
+    uint64_t GetReplicationTickNumber() const;
+    CellLayerAssigner& GetCellLayerAssigner() { return m_cellLayerAssigner; }
+    const CellLayerAssigner& GetCellLayerAssigner() const { return m_cellLayerAssigner; }
+    void UpdateCellLayerForPlayer(Engine::Net::UserId userId, const glm::vec3& position);
+
 private:
-    void AcceptLoop();
-    void ClientReceiveLoop(Engine::Net::UserId userId);
+    void IoLoop();
+    size_t PollClients();
     void RemoveClient(Engine::Net::UserId userId);
     void HandleClientMessage(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
     void HandleUnreliableTransform(Engine::Net::UserId userId,
                                    const Engine::Net::TransformStatePayload& transform);
+    void HandleUdpMovementCommand(Engine::Net::UserId userId, Engine::Net::MovementCommand& command);
     void HandleUdpSessionRegister(const Engine::Net::UdpSessionRegisterPayload& registration,
                                     const UdpDatagramContext& context);
     Engine::Net::UserId ResolveUdpUser(const UdpDatagramContext& context) const;
     void ClearUdpEndpoint(Engine::Net::UserId userId);
+    void ClearUdpEndpointUnlocked(Engine::Net::UserId userId);
+    bool IsShardAtCapacity() const;
+    void FillRedirectResponse(Engine::Net::LoginResponsePayload& response) const;
+    void SendLayerMigrationRedirect(Engine::Net::UserId userId);
+    size_t CountLoggedInClientsUnlocked() const;
+    static float DecodeTickP95Ms(uint32_t bits);
+    static uint32_t EncodeTickP95Ms(float tickP95Ms);
+    size_t ReplicationQueueMaxDepth() const;
 
     bool SendToClient(Engine::Net::UserId userId, const Engine::Net::NetPacket& message);
+    bool SendUdpTransformTo(Engine::Net::UserId userId, const Engine::Net::TransformStatePayload& transform);
+    bool SendUdpTransformBatchTo(Engine::Net::UserId userId,
+                                 const std::vector<Engine::Net::TransformStatePayload>& transforms);
+    bool SendUdpPayloadTo(Engine::Net::UserId userId,
+                            Engine::Net::MessageType type,
+                            const Engine::Net::NetBuffer& payload);
+    bool DeliverTransformToObserver(Engine::Net::UserId observerId,
+                                    Engine::Net::UserId sourceUserId,
+                                    const Engine::Net::TransformStatePayload& transform,
+                                    bool layeringActive,
+                                    const Engine::Net::EffectiveLayerRadii& radii);
     void Broadcast(const Engine::Net::NetPacket& message,
                    Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
     void BroadcastToInterested(const Engine::Net::NetPacket& message,
                                  Engine::Net::UserId sourceUserId,
                                  const glm::vec3& sourcePosition,
                                  Engine::Net::UserId excludeUserId = Engine::Net::kInvalidUserId);
-    void SendExistingPeersTo(Engine::Net::UserId newUserId);
-    void SendExistingPeerTransformsTo(Engine::Net::UserId newUserId);
+    bool ParseEndpointKey(const std::string& endpointKey, std::string& outHost, uint16_t& outPort) const;
+    uint64_t GetClientSessionToken(Engine::Net::UserId userId) const;
 
     static std::string MakeEndpointKey(const std::string& host, uint16_t port);
+
+    struct PendingPeerTransform {
+        Engine::Net::TransformStatePayload transform;
+        Engine::Net::UserId sourceUserId = Engine::Net::kInvalidUserId;
+        Engine::Net::UserId observerId = Engine::Net::kInvalidUserId;
+    };
+
+    void RequeueFailedTransforms(std::deque<PendingPeerTransform>& failed);
 
     Socket m_listenSocket;
     UdpChannel m_udpChannel;
     InterestManager m_interestManager;
+    CellLayerAssigner m_cellLayerAssigner;
     ServerAuthority m_authority;
-    std::thread m_acceptThread;
+    std::thread m_ioThread;
 
     mutable std::mutex m_clientsMutex;
     mutable std::mutex m_worldMutex;
@@ -131,12 +221,28 @@ private:
     Engine::Net::UserId m_nextUserId = 1;
     std::atomic<uint64_t> m_sequence{1};
     std::string m_requiredAuthToken;
+    Engine::Net::ServerSecurityPolicy m_securityPolicy;
     Engine::Net::CredentialStore m_credentialStore;
+    Engine::Net::ShardConfig m_shardConfig;
+    Engine::Net::ScalePolicyConfig m_scalePolicy;
+    std::atomic<bool> m_layeringActive{false};
+    std::atomic<uint32_t> m_observedTickP95Bits{0};
     TlsConfig m_tlsConfig;
     ClientLoggedInCallback m_clientLoggedInCallback;
     ClientDisconnectedCallback m_clientDisconnectedCallback;
     GenericDataInterceptor m_genericDataInterceptor;
+    MovementCommandInterceptor m_movementCommandInterceptor;
     bool m_authoritativeMode = false;
+    RateLimiter m_movementRateLimiter{120.0f, 30.0f};
+    RateLimiter m_loginRateLimiter{100.0f, 200.0f};
+    std::atomic<uint32_t> m_movementCommandsDropped{0};
+    std::atomic<uint32_t> m_loginAttemptsDropped{0};
+    std::atomic<uint32_t> m_overflowLayerPopulation{0};
+    std::atomic<uint64_t> m_replicationTickNumber{0};
+
+    mutable std::mutex m_replicationQueueMutex;
+    std::deque<PendingPeerTransform> m_pendingPeerTransforms;
+    std::deque<PendingPeerTransform> m_pendingSelfTransforms;
 
     std::atomic<bool> m_running{false};
 };
