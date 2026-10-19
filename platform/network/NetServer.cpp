@@ -295,6 +295,15 @@ void NetServer::Stop() {
     m_udpChannel.Close();
 
     {
+        std::lock_guard<std::mutex> lock(m_clientsMutex);
+        for (auto& entry : m_clients) {
+            if (entry.second && entry.second->connection) {
+                entry.second->connection->Close();
+            }
+        }
+    }
+
+    {
 
         std::lock_guard<std::mutex> lock(m_worldMutex);
 

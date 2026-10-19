@@ -94,9 +94,12 @@ void DatagramSocket::Close() {
         return;
     }
 #ifdef _WIN32
+    shutdown(ToNative(m_handle), SD_BOTH);
     closesocket(ToNative(m_handle));
 #else
-    close(static_cast<int>(ToNative(m_handle)));
+    const int fd = static_cast<int>(ToNative(m_handle));
+    shutdown(fd, SHUT_RDWR);
+    close(fd);
 #endif
     m_handle = kInvalidHandle;
     m_connected = false;

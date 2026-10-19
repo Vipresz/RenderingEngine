@@ -87,10 +87,15 @@ void Socket::Close() {
     if (!IsValid()) {
         return;
     }
+    // shutdown wakes a recv blocked in another thread. close() alone does not
+    // on Linux, so NetClient::Disconnect would join that thread forever.
 #ifdef _WIN32
+    shutdown(ToNative(m_handle), SD_BOTH);
     closesocket(ToNative(m_handle));
 #else
-    close(static_cast<int>(ToNative(m_handle)));
+    const int fd = static_cast<int>(ToNative(m_handle));
+    shutdown(fd, SHUT_RDWR);
+    close(fd);
 #endif
     m_handle = kInvalidHandle;
 }
