@@ -87,7 +87,7 @@ float CalcDirectionalShadowFactor(DirectionalLight light)
 	float current = projCoords.z;
 	
 	vec3 normal = normalize(Normal);
-	vec3 lightDir = normalize(directionalLight.direction);
+	vec3 lightDir = normalize(-directionalLight.direction);
 	
 	float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.0005);
 
@@ -144,7 +144,7 @@ vec4 CalcLightByDirection(Light light, vec3 direction, float shadowFactor)
 {
 	vec4 ambientColour = vec4(light.colour, 1.0f) * light.ambientIntensity;
 	
-	float diffuseFactor = max(dot(normalize(Normal), normalize(direction)), 0.0f);
+	float diffuseFactor = max(dot(normalize(Normal), normalize(-direction)), 0.0f);
 	vec4 diffuseColour = vec4(light.colour * light.diffuseIntensity * diffuseFactor, 1.0f);
 	
 	vec4 specularColour = vec4(0, 0, 0, 0);
