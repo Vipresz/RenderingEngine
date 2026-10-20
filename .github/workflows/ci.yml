@@ -95,6 +95,14 @@ jobs:
       - name: Install OpenCppCoverage
         shell: powershell
         run: |
+          $installed = @(
+            "${env:ProgramFiles}\OpenCppCoverage\OpenCppCoverage.exe",
+            "${env:ProgramFiles(x86)}\OpenCppCoverage\OpenCppCoverage.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($installed) {
+            Write-Host "OpenCppCoverage already installed at $installed"
+            exit 0
+          }
           $dest = Join-Path $env:TEMP "OpenCppCoverageSetup.exe"
           $url = "https://github.com/OpenCppCoverage/OpenCppCoverage/releases/download/release-0.9.9.0/OpenCppCoverageSetup-x64-0.9.9.0.exe"
           $downloaded = $false
