@@ -85,8 +85,11 @@ int Window::Initialize() {
         const char* label;
     };
 # if defined(_WIN32)
-    // Prefer GL 3.3+ first (editor shaders require it). 1.1 last — GDI fallback only if nothing else works.
+    // Ocean FFT compute shaders need 4.3. Editor and game shaders are 3.3 and still run on a 4.x compat context.
+    // 1.1 last — GDI fallback only if nothing else works.
     static const GlTry kTries[] = {
+        {4, 3, true, GLFW_OPENGL_COMPAT_PROFILE, true, "4.3 compat"},
+        {4, 3, true, GLFW_OPENGL_ANY_PROFILE, true, "4.3 any"},
         {3, 3, true, GLFW_OPENGL_COMPAT_PROFILE, true, "3.3 compat"},
         {3, 3, true, GLFW_OPENGL_ANY_PROFILE, true, "3.3 any"},
         {2, 1, true, GLFW_OPENGL_ANY_PROFILE, true, "2.1 any"},
@@ -102,6 +105,7 @@ int Window::Initialize() {
     };
 # else
     static const GlTry kTries[] = {
+        {4, 3, true, GLFW_OPENGL_COMPAT_PROFILE, true, "4.3 compat"},
         {3, 3, true, GLFW_OPENGL_COMPAT_PROFILE, true, "3.3 compat"},
     };
 # endif
