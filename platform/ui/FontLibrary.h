@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 struct nk_context;
 struct nk_font;
@@ -66,6 +67,8 @@ private:
 
     void InitSlot(FontRole role, const char* fileName, float size);
     bool TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logMissing = true);
+    bool LoadRole(struct nk_font_atlas* atlas, FontRole role, const char* fileName, float size,
+                  const std::vector<std::string>& fallbacks);
     std::string ResolvePath(const char* fileName) const;
 
     Config m_config;

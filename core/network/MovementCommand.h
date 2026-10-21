@@ -49,6 +49,9 @@ struct MovementCommand {
     bool faceMovement = true;
     float facingYawDegrees = 0.0f;
     float movementSpeed = 1.4f;
+    // Dev flight. moveY is the vertical part of a unit move direction.
+    float moveY = 0.0f;
+    bool fly = false;
 };
 
 inline NetBuffer SerializeMovementCommand(const MovementCommand& command) {
@@ -62,6 +65,8 @@ inline NetBuffer SerializeMovementCommand(const MovementCommand& command) {
     buffer.WriteU8(command.faceMovement ? 1 : 0);
     buffer.WriteFloat(command.facingYawDegrees);
     buffer.WriteFloat(command.movementSpeed);
+    buffer.WriteFloat(command.moveY);
+    buffer.WriteU8(command.fly ? 1 : 0);
     return buffer;
 }
 
@@ -79,6 +84,19 @@ inline bool DeserializeMovementCommand(const NetBuffer& buffer, MovementCommand&
     out.run = run != 0;
     out.jumpPressed = jump != 0;
     out.faceMovement = face != 0;
+    float moveY = 0.0f;
+    uint8_t fly = 0;
+    if (!copy.ReadFloat(moveY)) {
+        out.moveY = 0.0f;
+        out.fly = false;
+        return true;
+    }
+    out.moveY = moveY;
+    if (!copy.ReadU8(fly)) {
+        out.fly = false;
+        return true;
+    }
+    out.fly = fly != 0;
     return true;
 }
 
@@ -95,6 +113,7 @@ inline void SanitizeMovementCommand(MovementCommand& command,
     const float runSpeed = speeds.runSpeed > 0.0f ? speeds.runSpeed : kAuthoritativeRunSpeed;
     command.movementSpeed = command.run ? runSpeed : walkSpeed;
     command.moveX = std::clamp(command.moveX, -1.0f, 1.0f);
+    command.moveY = std::clamp(command.moveY, -1.0f, 1.0f);
     command.moveZ = std::clamp(command.moveZ, -1.0f, 1.0f);
     command.facingYawDegrees = NormalizeDegrees(command.facingYawDegrees);
 }

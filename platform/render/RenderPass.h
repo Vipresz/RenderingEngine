@@ -14,6 +14,7 @@ namespace Render {
 struct RenderContext {
     ECS::Registry* registry = nullptr;
     Shader* shader = nullptr;
+    Shader* terrainShader = nullptr;
     ICameraSource* cameraSource = nullptr;
     glm::mat4 projection{1.0f};
     glm::mat4 view{1.0f};

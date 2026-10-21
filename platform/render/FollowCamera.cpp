@@ -126,6 +126,14 @@ bool FollowCamera::GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) 
     return true;
 }
 
+glm::vec3 FollowCamera::GetLookDirection() const {
+    const glm::vec3 direction = m_lookAtTarget - m_cameraPosition;
+    if (glm::length(direction) > 0.01f) {
+        return glm::normalize(direction);
+    }
+    return GetForwardDirection();
+}
+
 float FollowCamera::GetPlanarFacingYawDegrees() const {
     // Orbit yaw maps to character facing: Transform yaw 0 = -Z, camera behind at m_yaw 180
     return m_yaw - 180.0f;

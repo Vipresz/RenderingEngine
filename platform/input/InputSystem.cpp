@@ -187,17 +187,32 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
         rightDir = glm::vec3(1.0f, 0.0f, 0.0f);
     }
 
+    glm::vec3 flyForward = forwardDir;
+    if (m_flightEnabled && m_cameraSource) {
+        flyForward = m_cameraSource->GetLookDirection();
+        if (glm::length(flyForward) < 0.0001f) {
+            flyForward = forwardDir;
+        }
+    }
+    const glm::vec3 horizontalForward = m_flightEnabled ? flyForward : forwardDir;
+
     if (keys[GLFW_KEY_W] || keys[GLFW_KEY_UP]) {
-        moveDirection += forwardDir;
+        moveDirection += horizontalForward;
     }
     if (keys[GLFW_KEY_S] || keys[GLFW_KEY_DOWN]) {
-        moveDirection -= forwardDir;
+        moveDirection -= horizontalForward;
     }
     if (keys[GLFW_KEY_A] || keys[GLFW_KEY_LEFT]) {
         moveDirection -= rightDir;
     }
     if (keys[GLFW_KEY_D] || keys[GLFW_KEY_RIGHT]) {
         moveDirection += rightDir;
+    }
+    if (m_flightEnabled && keys[GLFW_KEY_SPACE]) {
+        moveDirection += glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+    if (m_flightEnabled && (keys[GLFW_KEY_LEFT_CONTROL] || keys[GLFW_KEY_RIGHT_CONTROL])) {
+        moveDirection += glm::vec3(0.0f, -1.0f, 0.0f);
     }
 
     const bool manualMove = glm::length(moveDirection) > 0.0f;
@@ -207,11 +222,11 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
 
     bool isRunning =
         (keys[GLFW_KEY_LEFT_SHIFT] || keys[GLFW_KEY_RIGHT_SHIFT]) &&
-        (keys[GLFW_KEY_W] || keys[GLFW_KEY_UP]);
+        (m_flightEnabled ? manualMove : (keys[GLFW_KEY_W] || keys[GLFW_KEY_UP]));
     bool isMoving = manualMove;
     if (isMoving) {
         moveDirection = glm::normalize(moveDirection);
-    } else if (m_followAutoMoveQuery) {
+    } else if (!m_flightEnabled && m_followAutoMoveQuery) {
         glm::vec3 followDirection(0.0f);
         bool followRun = false;
         if (m_followAutoMoveQuery(followDirection, followRun)) {
@@ -240,9 +255,11 @@ void InputSystem::HandleCharacterMovement(float deltaTime, ECS::Registry& regist
     command.tick = tickNumber;
     command.deltaTime = deltaTime;
     command.moveX = moveDirection.x;
+    command.moveY = m_flightEnabled ? moveDirection.y : 0.0f;
     command.moveZ = moveDirection.z;
     command.run = isRunning;
-    command.jumpPressed = spaceJustPressed;
+    command.fly = m_flightEnabled;
+    command.jumpPressed = m_flightEnabled ? false : spaceJustPressed;
     command.faceMovement = !rmbHeld;
     command.facingYawDegrees = transform->GetYaw();
     if (rmbHeld && m_cameraSource) {

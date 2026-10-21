@@ -28,6 +28,7 @@ public:
     glm::mat4 GetViewMatrix() const override;
     glm::vec3 GetEyePosition() const override;
     bool GetMovementBasis(glm::vec3& outForward, glm::vec3& outRight) const override;
+    glm::vec3 GetLookDirection() const override;
     float GetPlanarFacingYawDegrees() const override;
     
     // Legacy aliases (existing game / example code)

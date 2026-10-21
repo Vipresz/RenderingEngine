@@ -68,26 +68,27 @@ bool NuklearUI::Initialize(GLFWwindow* window, FontLibrary* fontLibrary) {
     
     struct nk_font_atlas* atlas;
     nk_glfw3_font_stash_begin(m_nuklear, &atlas);
-    // The editor has no font library. Leave the atlas empty so the bake installs
-    // Nuklear's 13px font and sets default_font. A pre-added 36px font skips that
-    // and, once selected, overflows the 18-30px rows.
-    // A font library still bakes its HUD face. That makes font_num non-zero, so
-    // default_font must be set here or the first window reads a null style font.
+    // No font library (the editor): leave the atlas empty so the bake installs
+    // Nuklear's 13px font. A pre-added large face skips that and overflows small rows.
     struct nk_font* defaultPlayFont = nullptr;
-    if (m_fontLibrary) {
+    const bool bakedUiFont = m_fontLibrary && m_fontLibrary->BakeIntoAtlas(atlas);
 #ifdef NK_INCLUDE_DEFAULT_FONT
-        struct nk_font_config playFontCfg = nk_font_config(m_fontLibrary->GetConfig().hudSize);
+    if (m_fontLibrary && !bakedUiFont) {
+        const float fallbackSize = m_fontLibrary->GetConfig().uiSize;
+        struct nk_font_config playFontCfg = nk_font_config(fallbackSize);
         playFontCfg.range = nk_font_default_glyph_ranges();
-        playFontCfg.oversample_h = 1;
-        playFontCfg.oversample_v = 1;
-        defaultPlayFont = nk_font_atlas_add_default(atlas, m_fontLibrary->GetConfig().hudSize, &playFontCfg);
+        defaultPlayFont = nk_font_atlas_add_default(atlas, fallbackSize, &playFontCfg);
         if (defaultPlayFont) {
             atlas->default_font = defaultPlayFont;
             m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::Hud, defaultPlayFont);
             m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiBold, defaultPlayFont);
             m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiRegular, defaultPlayFont);
         }
+    }
+#else
+    (void)bakedUiFont;
 #endif
+    if (m_fontLibrary) {
         m_fontLibrary->LoadChatFont(atlas);
     }
     nk_glfw3_font_stash_end(m_nuklear);

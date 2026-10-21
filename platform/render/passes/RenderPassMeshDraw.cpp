@@ -7,6 +7,7 @@
 #include "render/components/MaterialComponent.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MeshLodComponent.h"
+#include "render/components/TerrainMaterialComponent.h"
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
 #include "render/Skeleton.h"
@@ -14,9 +15,11 @@
 #include <GL/glew.h>
 
 #include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
 #include <limits>
+#include <string>
 #include <vector>
 
 namespace {
@@ -175,6 +178,121 @@ void CollectMeshDrawItems(ECS::Registry& registry,
     }
 }
 
+void SetTerrainFloat(GLuint program, const char* name, float value) {
+    const GLint location = glGetUniformLocation(program, name);
+    if (location != -1) {
+        glUniform1f(location, value);
+    }
+}
+
+void SetTerrainVec3(GLuint program, const char* name, float x, float y, float z) {
+    const GLint location = glGetUniformLocation(program, name);
+    if (location != -1) {
+        glUniform3f(location, x, y, z);
+    }
+}
+
+void BindTerrainTexture(GLuint program, const char* name, int unit, GLuint texture) {
+    const GLint location = glGetUniformLocation(program, name);
+    if (location != -1) {
+        glUniform1i(location, unit);
+    }
+    glActiveTexture(GL_TEXTURE0 + unit);
+    glBindTexture(GL_TEXTURE_2D, texture);
+}
+
+void DrawTerrainItems(RenderContext& context, const std::vector<MeshDrawItem>& items) {
+    if (!context.terrainShader || !context.cameraSource || items.empty()) {
+        return;
+    }
+
+    static float exoticTime = 0.0f;
+    exoticTime += context.deltaTime;
+
+    Shader* shader = context.terrainShader;
+    shader->UseShader();
+    if (!shader->IsValid()) {
+        return;
+    }
+
+    const GLuint program = shader->GetShaderID();
+    const glm::mat4 view = context.cameraSource->GetViewMatrix();
+    const glm::vec3 eye = context.cameraSource->GetEyePosition();
+    if (shader->GetViewLocation() != -1) {
+        glUniformMatrix4fv(shader->GetViewLocation(), 1, GL_FALSE, glm::value_ptr(view));
+    }
+    if (shader->GetProjectionLocation() != -1) {
+        glUniformMatrix4fv(shader->GetProjectionLocation(), 1, GL_FALSE, glm::value_ptr(context.projection));
+    }
+    if (shader->GetEyePositionLocation() != -1) {
+        glUniform3f(shader->GetEyePositionLocation(), eye.x, eye.y, eye.z);
+    }
+    shader->SetDirectionalLightTransform(&context.directionalLightTransform);
+
+    if (context.shadowMapTexture != 0) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, context.shadowMapTexture);
+        const GLint shadowLoc = glGetUniformLocation(program, "directionalShadowMap");
+        if (shadowLoc != -1) {
+            glUniform1i(shadowLoc, 0);
+        }
+    }
+
+    SetTerrainVec3(program, "directionalLight.base.colour", 1.0f, 1.0f, 1.0f);
+    SetTerrainFloat(program, "directionalLight.base.ambientIntensity", 0.3f);
+    SetTerrainFloat(program, "directionalLight.base.diffuseIntensity", 0.7f);
+    SetTerrainVec3(program, "directionalLight.direction", 0.3f, -1.0f, 0.2f);
+    SetTerrainFloat(program, "exoticTime", exoticTime);
+
+    const GLint modelLoc = shader->GetModelLocation();
+    for (const MeshDrawItem& item : items) {
+        const auto* transformComp = context.registry->GetComponent<Components::TransformComponent>(item.entityID);
+        const auto* terrain = context.registry->GetComponent<Components::TerrainMaterialComponent>(item.entityID);
+        if (!transformComp || !terrain || item.model == nullptr) {
+            continue;
+        }
+
+        if (modelLoc != -1) {
+            const glm::mat4 modelMatrix = transformComp->GetMatrix();
+            glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(modelMatrix));
+        }
+
+        for (int layer = 0; layer < 4; ++layer) {
+            const std::string albedoName = "albedoMap[" + std::to_string(layer) + "]";
+            const std::string normalName = "normalMap[" + std::to_string(layer) + "]";
+            const std::string ormName = "ormMap[" + std::to_string(layer) + "]";
+            BindTerrainTexture(program, albedoName.c_str(), 1 + layer, terrain->albedo[layer]);
+            BindTerrainTexture(program, normalName.c_str(), 5 + layer, terrain->normalMap[layer]);
+            BindTerrainTexture(program, ormName.c_str(), 9 + layer, terrain->orm[layer]);
+        }
+
+        SetTerrainVec3(program, "tint", terrain->tint[0], terrain->tint[1], terrain->tint[2]);
+        SetTerrainFloat(program, "roughnessBias", terrain->roughnessBias);
+        SetTerrainFloat(program, "uvScale", terrain->uvScale);
+        SetTerrainFloat(program, "terrainHeight", terrain->terrainHeight);
+        SetTerrainFloat(program, "slopeRock", terrain->slopeRock);
+        SetTerrainFloat(program, "heightCover", terrain->heightCover);
+        SetTerrainFloat(program, "coverAmount", terrain->coverAmount);
+        SetTerrainFloat(program, "accentAmount", terrain->accentAmount);
+        SetTerrainFloat(program, "moss", terrain->moss);
+        SetTerrainFloat(program, "snowAmount", terrain->snow);
+        SetTerrainFloat(program, "ash", terrain->ash);
+        SetTerrainFloat(program, "dust", terrain->dust);
+        SetTerrainFloat(program, "wet", terrain->wet);
+        SetTerrainFloat(program, "cracks", terrain->cracks);
+        SetTerrainFloat(program, "exoticAmount", terrain->exoticAmount);
+        SetTerrainFloat(program, "exoticPulse", terrain->exoticPulse);
+        SetTerrainVec3(program, "exoticColor", terrain->exoticColor[0], terrain->exoticColor[1], terrain->exoticColor[2]);
+        SetTerrainFloat(program, "paintAmount", terrain->paintAmount);
+        SetTerrainFloat(program, "useMasks", terrain->useMasks);
+        BindTerrainTexture(program, "materialMask", 13, terrain->materialMask);
+        BindTerrainTexture(program, "flowMask", 14, terrain->flowMask);
+
+        UploadBoneUniforms(program, nullptr);
+        item.model->RenderModel();
+    }
+}
+
 void DrawMeshDrawItems(RenderContext& context,
                        const std::vector<MeshDrawItem>& items,
                        bool transparentPass) {
@@ -200,7 +318,16 @@ void DrawMeshDrawItems(RenderContext& context,
         glDepthMask(GL_FALSE);
     }
 
+    std::vector<MeshDrawItem> terrainItems;
     for (const MeshDrawItem& item : items) {
+        const auto* terrainComp =
+            context.registry->GetComponent<Components::TerrainMaterialComponent>(item.entityID);
+        if (!transparentPass && terrainComp && terrainComp->active && context.terrainShader &&
+            context.terrainShader->IsValid()) {
+            terrainItems.push_back(item);
+            continue;
+        }
+
         auto* transformComp = context.registry->GetComponent<Components::TransformComponent>(item.entityID);
         auto* materialComp = context.registry->GetComponent<Components::MaterialComponent>(item.entityID);
         if (!transformComp || item.model == nullptr) {
@@ -234,6 +361,11 @@ void DrawMeshDrawItems(RenderContext& context,
         const auto* animComp = context.registry->GetComponent<Components::AnimationComponent>(item.entityID);
         UploadBoneUniforms(shaderProgramID, animComp ? animComp->skeleton : nullptr);
         item.model->RenderModelPerMeshTexture(uniformUseTexture);
+    }
+
+    if (!terrainItems.empty()) {
+        DrawTerrainItems(context, terrainItems);
+        context.shader->UseShader();
     }
 
     if (transparentPass) {

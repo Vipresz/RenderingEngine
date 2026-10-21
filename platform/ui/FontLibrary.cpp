@@ -48,6 +48,20 @@ void FontLibrary::InitSlot(FontRole role, const char* fileName, float size) {
     slot.font = nullptr;
 }
 
+bool IsFontFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    unsigned char magic[4] = {};
+    file.read(reinterpret_cast<char*>(magic), 4);
+    if (file.gcount() < 4) {
+        return false;
+    }
+    const bool trueType = magic[0] == 0x00 && magic[1] == 0x01 && magic[2] == 0x00 && magic[3] == 0x00;
+    const bool openType = magic[0] == 'O' && magic[1] == 'T' && magic[2] == 'T' && magic[3] == 'O';
+    const bool collection = magic[0] == 't' && magic[1] == 't' && magic[2] == 'c' && magic[3] == 'f';
+    const bool trueTag = magic[0] == 't' && magic[1] == 'r' && magic[2] == 'u' && magic[3] == 'e';
+    return trueType || openType || collection || trueTag;
+}
+
 bool FontLibrary::TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logMissing) {
     if (!atlas || !slot.fileName || slot.resolvedPath.empty()) {
         return false;
@@ -62,10 +76,15 @@ bool FontLibrary::TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logM
     }
     probe.close();
 
+    if (!IsFontFile(slot.resolvedPath)) {
+        LOG_WARNING_FMT("FontLibrary", "Skipping %s because it is not a font file", slot.resolvedPath.c_str());
+        return false;
+    }
+
     struct nk_font_config cfg = nk_font_config(slot.size);
-    cfg.oversample_h = 1;
-    cfg.oversample_v = 1;
-    cfg.pixel_snap = nk_true;
+    cfg.oversample_h = 2;
+    cfg.oversample_v = 2;
+    cfg.pixel_snap = nk_false;
     cfg.range = nk_font_default_glyph_ranges();
 
     struct nk_font* font = nk_font_atlas_add_from_file(
@@ -85,19 +104,63 @@ bool FontLibrary::TryLoadSlot(struct nk_font_atlas* atlas, Slot& slot, bool logM
     return true;
 }
 
+bool FontLibrary::LoadRole(struct nk_font_atlas* atlas, FontRole role, const char* fileName, float size,
+                           const std::vector<std::string>& fallbacks) {
+    InitSlot(role, fileName, size);
+    Slot& slot = m_slots[static_cast<int>(role)];
+
+    std::vector<std::string> candidates;
+    if (!slot.resolvedPath.empty()) {
+        candidates.push_back(slot.resolvedPath);
+    }
+    candidates.insert(candidates.end(), fallbacks.begin(), fallbacks.end());
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        slot.resolvedPath = candidates[i];
+        const bool logMissing = i + 1 == candidates.size();
+        if (TryLoadSlot(atlas, slot, logMissing)) {
+            return true;
+        }
+    }
+    slot.font = nullptr;
+    return false;
+}
+
 bool FontLibrary::BakeIntoAtlas(struct nk_font_atlas* atlas) {
     if (!atlas) {
         return false;
     }
 
-    InitSlot(FontRole::Hud, "Inter-Bold.ttf", m_config.hudSize);
+#if defined(_WIN32)
+    const std::vector<std::string> regularFallbacks = {
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/calibri.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    };
+    const std::vector<std::string> boldFallbacks = {
+        "C:/Windows/Fonts/segoeuib.ttf",
+        "C:/Windows/Fonts/calibrib.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+    };
+#else
+    const std::vector<std::string> regularFallbacks;
+    const std::vector<std::string> boldFallbacks;
+#endif
 
     bool anyLoaded = false;
-    if (TryLoadSlot(atlas, m_slots[static_cast<int>(FontRole::Hud)])) {
-        anyLoaded = true;
-        struct nk_font* hud = GetFont(FontRole::Hud);
-        m_slots[static_cast<int>(FontRole::UiRegular)].font = hud;
-        m_slots[static_cast<int>(FontRole::UiBold)].font = hud;
+    anyLoaded = LoadRole(atlas, FontRole::UiRegular, "Inter-Regular.ttf", m_config.uiSize, regularFallbacks) ||
+                anyLoaded;
+    anyLoaded = LoadRole(atlas, FontRole::UiBold, "Inter-Bold.ttf", m_config.uiSize, boldFallbacks) || anyLoaded;
+    anyLoaded = LoadRole(atlas, FontRole::Hud, "Inter-Bold.ttf", m_config.hudSize, boldFallbacks) || anyLoaded;
+
+    if (!GetFont(FontRole::UiBold)) {
+        m_slots[static_cast<int>(FontRole::UiBold)].font = GetFont(FontRole::UiRegular);
+    }
+    if (!GetFont(FontRole::UiRegular)) {
+        m_slots[static_cast<int>(FontRole::UiRegular)].font = GetFont(FontRole::UiBold);
+    }
+    if (!GetFont(FontRole::Hud)) {
+        m_slots[static_cast<int>(FontRole::Hud)].font = GetFont(FontRole::UiBold);
     }
     return anyLoaded;
 }

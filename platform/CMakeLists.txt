@@ -11,6 +11,7 @@ set(PLATFORM_SOURCES
     render/Shader.cpp
     render/Texture.cpp
     render/Material.cpp
+    render/TerrainMaterial.cpp
     render/Camera.cpp
     render/FollowCamera.cpp
     render/Model.cpp

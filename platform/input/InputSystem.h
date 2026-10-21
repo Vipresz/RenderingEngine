@@ -60,6 +60,10 @@ public:
     // Terrain for height sampling (character adheres to terrain)
     void SetTerrainModel(Render::Model* terrain) { m_terrainModel = terrain; }
 
+    // Dev flight. While enabled, movement follows the camera in 3D and ignores the ground.
+    void SetFlightEnabled(bool enabled) { m_flightEnabled = enabled; }
+    bool IsFlightEnabled() const { return m_flightEnabled; }
+
     // UI input routing — return true to block game/camera input
     void SetInputBlockQuery(std::function<bool()> query) { m_inputBlockQuery = std::move(query); }
     void SetEscapeCallback(std::function<void()> callback) { m_escapeCallback = std::move(callback); }
@@ -93,6 +97,7 @@ private:
     bool m_moveLeft = false;
     bool m_moveRight = false;
     bool m_spacePressedLastFrame = false; // Track previous frame space key state for jump
+    bool m_flightEnabled = false;
     bool m_escapePressedLastFrame = false;
     std::function<bool()> m_inputBlockQuery;
     std::function<void()> m_escapeCallback;

@@ -1,0 +1,105 @@
+#version 430 core
+// Adapted from external/GodotOceanWaves spectrum_compute.glsl (TMA + Hasselmann).
+
+#define PI (3.141592653589793)
+#define G  (9.81)
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(rgba16f, binding = 0) restrict writeonly uniform image2DArray spectrum;
+
+uniform ivec2 seed;
+uniform vec2 tile_length;
+uniform float alpha;
+uniform float peak_frequency;
+uniform float wind_speed;
+uniform float angle;
+uniform float depth;
+uniform float swell;
+uniform float detail;
+uniform float spread;
+uniform float k_low;
+uniform float k_high;
+uniform uint cascade_index;
+
+vec2 hash(in uvec2 x) {
+	uint h32 = x.y + 374761393U + x.x*3266489917U;
+    h32 = 2246822519U * (h32 ^ (h32 >> 15));
+    h32 = 3266489917U * (h32 ^ (h32 >> 13));
+    uint n = h32 ^ (h32 >> 16);
+    uvec2 rz = uvec2(n, n*48271U);
+    return vec2((rz.xy >> 1) & uvec2(0x7FFFFFFFU)) / float(0x7FFFFFFF);
+}
+
+vec2 gaussian(in vec2 x) {
+	float r = sqrt(-2.0 * log(x.x));
+	float theta = 2.0*PI * x.y;
+	return vec2(r*cos(theta), r*sin(theta));
+}
+
+vec2 conj_complex(in vec2 x) {
+	return vec2(x.x, -x.y);
+}
+
+vec2 dispersion_relation(in float k) {
+	float a = k*depth;
+	float b = tanh(a);
+	float dispersion = sqrt(G*k*b);
+	float d_dispersion = 0.5*G * (b + a*(1.0 - b*b)) / dispersion;
+	return vec2(dispersion, d_dispersion);
+}
+
+float longuet_higgins_normalization(in float s) {
+	float a = sqrt(s);
+	return (s < 0.4) ? (0.5/PI) + s*(0.220636+s*(-0.109+s*0.090)) : inversesqrt(PI)*(a*0.5 + (1.0/a)*0.0625);
+}
+
+float longuet_higgins_function(in float s, in float theta) {
+	return longuet_higgins_normalization(s) * pow(abs(cos(theta*0.5)), 2.0*s);
+}
+
+float hasselmann_directional_spread(in float w, in float w_p, in float speed, in float theta) {
+	float p = w / w_p;
+	float s = (w <= w_p) ? 6.97*pow(abs(p), 4.06) : 9.77*pow(abs(p), -2.33 - 1.45*(speed*w_p/G - 1.17));
+	float s_xi = 16.0 * tanh(w_p / w) * swell*swell;
+    return longuet_higgins_function(s + s_xi, theta - angle);
+}
+
+float TMA_spectrum(in float w, in float w_p, in float jonswap_alpha) {
+	const float beta = 1.25;
+	const float gamma = 3.3;
+	float sigma = (w <= w_p) ? 0.07 : 0.09;
+	float r = exp(-(w-w_p)*(w-w_p) / (2.0 * sigma*sigma * w_p*w_p));
+	float jonswap_spectrum = (jonswap_alpha * G*G) / pow(w, 5) * exp(-beta * pow(w_p/w, 4)) * pow(gamma, r);
+	float w_h = min(w * sqrt(depth / G), 2.0);
+	float kitaigorodskii_depth_attenuation = (w_h <= 1.0) ? 0.5*w_h*w_h : 1.0 - 0.5*(2.0-w_h)*(2.0-w_h);
+	return jonswap_spectrum * kitaigorodskii_depth_attenuation;
+}
+
+vec2 get_spectrum_amplitude(in ivec2 id, in ivec2 map_size) {
+	vec2 dk = 2.0*PI / tile_length;
+	vec2 k_vec = (id - map_size*0.5)*dk;
+	float k = length(k_vec) + 1e-6;
+	float theta = atan(k_vec.x, k_vec.y);
+	vec2 dispersion = dispersion_relation(k);
+	float w = dispersion[0];
+	float w_norm = dispersion[1] / k * dk.x*dk.y;
+	float s = TMA_spectrum(w, peak_frequency, alpha);
+	float d = mix(0.5/PI, hasselmann_directional_spread(w, peak_frequency, wind_speed, theta), 1.0 - spread) * exp(-(1.0-detail)*(1.0-detail) * k*k);
+	float band = 1.0;
+	if (k_low > 0.0) {
+		band *= smoothstep(k_low * 0.55, k_low, k);
+	}
+	if (k_high > 0.0) {
+		band *= 1.0 - smoothstep(k_high, k_high * 1.65, k);
+	}
+	return gaussian(hash(uvec2(id + seed))) * sqrt(2.0 * s * d * w_norm * band);
+}
+
+void main() {
+	const ivec2 dims = imageSize(spectrum).xy;
+	const ivec3 id = ivec3(gl_GlobalInvocationID.xy, int(cascade_index));
+	const ivec2 id0 = id.xy;
+	const ivec2 id1 = ivec2(mod(vec2(-id0), vec2(dims)));
+	imageStore(spectrum, id, vec4(get_spectrum_amplitude(id0, dims), conj_complex(get_spectrum_amplitude(id1, dims))));
+}

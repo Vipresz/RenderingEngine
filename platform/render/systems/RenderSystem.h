@@ -45,6 +45,7 @@ public:
     
 private:
     Shader* m_shader = nullptr;
+    Shader m_terrainShader;
     ICameraSource* m_cameraSource = nullptr;
     glm::mat4 m_projection;
     RenderPipeline m_pipeline;

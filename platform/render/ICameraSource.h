@@ -36,6 +36,16 @@ public:
     }
 
     // Horizontal facing angle (degrees) matching TransformComponent::SetYaw convention
+    // View direction including pitch. Flight uses this so movement follows where the camera looks.
+    virtual glm::vec3 GetLookDirection() const {
+        glm::vec3 forward(0.0f, 0.0f, -1.0f);
+        glm::vec3 right(1.0f, 0.0f, 0.0f);
+        if (!GetMovementBasis(forward, right)) {
+            return glm::vec3(0.0f, 0.0f, -1.0f);
+        }
+        return forward;
+    }
+
     virtual float GetPlanarFacingYawDegrees() const {
         glm::vec3 forward(0.0f);
         glm::vec3 right(0.0f);

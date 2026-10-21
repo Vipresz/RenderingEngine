@@ -48,6 +48,38 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
                                                 const MovementCommand& command,
                                                 const TerrainHeightSampler& terrainSampler) {
     const float deltaTime = std::max(command.deltaTime, 0.0f);
+    if (command.fly) {
+        glm::vec3 moveDirection(command.moveX, command.moveY, command.moveZ);
+        const bool isMoving = glm::length(moveDirection) > 0.0001f;
+        const float currentMovementSpeed = std::max(0.0f, command.movementSpeed);
+        if (isMoving) {
+            moveDirection = glm::normalize(moveDirection);
+        }
+        state.position += moveDirection * currentMovementSpeed * deltaTime;
+        state.isJumping = false;
+        state.jumpVelocity = 0.0f;
+        state.jumpAnimationActive = false;
+        state.airVelocityX = isMoving ? moveDirection.x * currentMovementSpeed : 0.0f;
+        state.airVelocityZ = isMoving ? moveDirection.z * currentMovementSpeed : 0.0f;
+
+        constexpr float kRotationSpeed = 720.0f;
+        const float maxRotation = kRotationSpeed * deltaTime;
+        if (isMoving && command.faceMovement &&
+            std::abs(moveDirection.x) + std::abs(moveDirection.z) > 0.0001f) {
+            const float desiredYaw =
+                glm::degrees(std::atan2(-moveDirection.x, -moveDirection.z)) + 180.0f;
+            RotateYawToward(state.yawDegrees, desiredYaw, maxRotation);
+        } else if (!command.faceMovement) {
+            RotateYawToward(state.yawDegrees, command.facingYawDegrees, maxRotation);
+        }
+        state.animationState = !isMoving ? MovementAnimationState::Idle
+                               : command.run ? MovementAnimationState::Running
+                                             : MovementAnimationState::Walking;
+        state.standingTurnSign = 0;
+        state.standingTurnHoldSeconds = 0.0f;
+        return;
+    }
+
     glm::vec3 moveDirection(command.moveX, 0.0f, command.moveZ);
     const bool isMoving = glm::length(moveDirection) > 0.0001f;
     const float currentMovementSpeed = std::max(0.0f, command.movementSpeed);

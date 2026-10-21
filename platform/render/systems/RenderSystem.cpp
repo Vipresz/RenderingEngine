@@ -65,6 +65,12 @@ void RenderSystem::Initialize(ECS::Registry& registry) {
     CreateDefaultShadowMap();
     CreateDefaultWhiteTexture();
 
+    m_terrainShader.SetWarnOnMissingUniforms(false);
+    m_terrainShader.CreateFromFiles("shaders/shader.vert", "shaders/terrain.frag");
+    if (!m_terrainShader.IsValid()) {
+        LOG_WARNING("RenderSystem", "Terrain shader failed to load — ground keeps the lit mesh shader");
+    }
+
     m_pipeline.ClearPasses();
     m_pipeline.AddPass(std::make_unique<Passes::ShadowRenderPass>());
     m_pipeline.AddPass(std::make_unique<Passes::OpaqueRenderPass>());
@@ -88,6 +94,7 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
     RenderContext context;
     context.registry = &registry;
     context.shader = m_shader;
+    context.terrainShader = m_terrainShader.IsValid() ? &m_terrainShader : nullptr;
     context.cameraSource = m_cameraSource;
     context.projection = m_projection;
     context.view = m_cameraSource->GetViewMatrix();
@@ -101,6 +108,7 @@ void RenderSystem::Update(float deltaTime, ECS::Registry& registry, uint64_t tic
 }
 
 void RenderSystem::Shutdown(ECS::Registry& registry) {
+    m_terrainShader.ClearShader();
     if (m_defaultShadowMapTexture != 0) {
         glDeleteTextures(1, &m_defaultShadowMapTexture);
         m_defaultShadowMapTexture = 0;
