@@ -76,7 +76,8 @@ float ShadowFactor(DirectionalLight light)
 	float current = projCoords.z;
 	vec3 normal = normalize(Normal);
 	vec3 lightDir = normalize(-light.direction);
-	float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.0005);
+	float ndotl = clamp(dot(normal, lightDir), 0.0, 1.0);
+	float bias = clamp(0.003 * (1.0 - ndotl), 0.0008, 0.008);
 	float shadow = 0.0;
 	vec2 texelSize = 1.0 / textureSize(directionalShadowMap, 0);
 	for (int x = -1; x <= 1; ++x)
@@ -88,7 +89,7 @@ float ShadowFactor(DirectionalLight light)
 		}
 	}
 	shadow /= 9.0;
-	if (projCoords.z > 1.0)
+	if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0)
 	{
 		shadow = 0.0;
 	}
@@ -192,17 +193,19 @@ void main()
 	vec3 mappedNormal = normalize(CotangentFrame(geometricNormal, FragPos, uv) * normalize(tangentNormal));
 	vec3 lightDir = normalize(-directionalLight.direction);
 	vec3 viewDir = normalize(eyePosition - FragPos);
-	float ndotl = max(dot(mappedNormal, lightDir), 0.0);
 	float shadow = ShadowFactor(directionalLight);
 	float specPower = mix(160.0, 6.0, roughness);
 	float spec = pow(max(dot(reflect(-lightDir, mappedNormal), viewDir), 0.0), specPower);
 	spec *= (1.0 - roughness) * mix(0.04, 1.0, metallic);
 
 	vec3 lightColour = directionalLight.base.colour;
-	vec3 ambient = lightColour * directionalLight.base.ambientIntensity * occlusion;
-	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * ndotl * (1.0 - shadow);
-	vec3 lit = albedo * (1.0 - metallic) * (ambient + diffuse);
-	lit += lightColour * spec * directionalLight.base.diffuseIntensity * (1.0 - shadow);
+	float sun = clamp(dot(mappedNormal, lightDir) * 0.65 + 0.35, 0.0, 1.0);
+	float sky = clamp(mappedNormal.y * 0.5 + 0.5, 0.0, 1.0);
+	vec3 fill = lightColour * directionalLight.base.ambientIntensity * mix(0.75, 1.25, sky) * occlusion;
+	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * sun * 2.6 * (1.0 - shadow);
+	vec3 lit = albedo * (1.0 - metallic) * (fill + diffuse);
+	lit += lightColour * spec * directionalLight.base.diffuseIntensity * 2.6 * (1.0 - shadow);
 	lit += emission;
+	lit = lit / (vec3(1.0) + lit);
 	colour = vec4(lit, 1.0);
 }

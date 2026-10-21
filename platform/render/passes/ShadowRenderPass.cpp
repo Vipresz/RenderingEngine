@@ -8,12 +8,14 @@
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
 #include "render/Skeleton.h"
+#include "render/SunLight.h"
 
 #include <GL/glew.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace {
@@ -96,7 +98,7 @@ void ShadowRenderPass::EnsureResources() {
 }
 
 glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context) const {
-    const glm::vec3 lightDir = glm::normalize(m_lightDirection);
+    const glm::vec3 lightDir = glm::normalize(SunLight::Travel());
 
     glm::vec3 focusCenter(0.0f, 5.0f, 0.0f);
     float focusDistance = 50.0f;
@@ -122,7 +124,10 @@ glm::mat4 ShadowRenderPass::ComputeLightSpaceMatrix(const RenderContext& context
     }
 
     const float zPadding = 25.0f;
-    const glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 up(0.0f, 1.0f, 0.0f);
+    if (std::abs(glm::dot(lightDir, up)) > 0.95f) {
+        up = glm::vec3(0.0f, 0.0f, 1.0f);
+    }
     const glm::vec3 lightPos = focusCenter - lightDir * 80.0f;
     const glm::mat4 lightView = glm::lookAt(lightPos, focusCenter, up);
 

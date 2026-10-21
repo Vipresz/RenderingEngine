@@ -1,12 +1,14 @@
 #include "render/passes/OpaqueRenderPass.h"
 
 #include "Logger.h"
+#include "render/SunLight.h"
 #include "render/passes/RenderPassMeshDraw.h"
 #include "render/components/MeshComponent.h"
 #include "render/components/MaterialComponent.h"
 #include "render/components/TransformComponent.h"
 
 #include <GL/glew.h>
+#include <glm/glm.hpp>
 
 #include <vector>
 
@@ -69,17 +71,19 @@ void OpaqueRenderPass::Execute(RenderContext& context) {
     if (uniformSpotLightCount != -1) {
         glUniform1i(uniformSpotLightCount, 0);
     }
+    const glm::vec3 sunColour = SunLight::Colour();
+    const glm::vec3 sunTravel = SunLight::Travel();
     if (uniformDirectionalLightColour != -1) {
-        glUniform3f(uniformDirectionalLightColour, 1.0f, 1.0f, 1.0f);
+        glUniform3f(uniformDirectionalLightColour, sunColour.r, sunColour.g, sunColour.b);
     }
     if (uniformDirectionalLightAmbient != -1) {
-        glUniform1f(uniformDirectionalLightAmbient, 0.3f);
+        glUniform1f(uniformDirectionalLightAmbient, SunLight::Ambient());
     }
     if (uniformDirectionalLightDiffuse != -1) {
-        glUniform1f(uniformDirectionalLightDiffuse, 0.7f);
+        glUniform1f(uniformDirectionalLightDiffuse, SunLight::Diffuse());
     }
     if (uniformDirectionalLightDirection != -1) {
-        glUniform3f(uniformDirectionalLightDirection, 0.3f, -1.0f, 0.2f);
+        glUniform3f(uniformDirectionalLightDirection, sunTravel.x, sunTravel.y, sunTravel.z);
     }
     if (uniformMaterialOpacity != -1) {
         glUniform1f(uniformMaterialOpacity, 1.0f);

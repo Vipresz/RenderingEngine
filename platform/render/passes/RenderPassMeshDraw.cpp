@@ -11,6 +11,7 @@
 #include "render/components/TransformComponent.h"
 #include "render/Model.h"
 #include "render/Skeleton.h"
+#include "render/SunLight.h"
 
 #include <GL/glew.h>
 
@@ -238,10 +239,12 @@ void DrawTerrainItems(RenderContext& context, const std::vector<MeshDrawItem>& i
         }
     }
 
-    SetTerrainVec3(program, "directionalLight.base.colour", 1.0f, 1.0f, 1.0f);
-    SetTerrainFloat(program, "directionalLight.base.ambientIntensity", 0.3f);
-    SetTerrainFloat(program, "directionalLight.base.diffuseIntensity", 0.7f);
-    SetTerrainVec3(program, "directionalLight.direction", 0.3f, -1.0f, 0.2f);
+    const glm::vec3 sunColour = SunLight::Colour();
+    const glm::vec3 sunTravel = SunLight::Travel();
+    SetTerrainVec3(program, "directionalLight.base.colour", sunColour.r, sunColour.g, sunColour.b);
+    SetTerrainFloat(program, "directionalLight.base.ambientIntensity", SunLight::Ambient());
+    SetTerrainFloat(program, "directionalLight.base.diffuseIntensity", SunLight::Diffuse());
+    SetTerrainVec3(program, "directionalLight.direction", sunTravel.x, sunTravel.y, sunTravel.z);
     SetTerrainFloat(program, "exoticTime", exoticTime);
 
     const GLint modelLoc = shader->GetModelLocation();

@@ -88,8 +88,8 @@ float CalcDirectionalShadowFactor(DirectionalLight light)
 	
 	vec3 normal = normalize(Normal);
 	vec3 lightDir = normalize(-directionalLight.direction);
-	
-	float bias = max(0.05 * (1.0 - dot(normal, lightDir)), 0.0005);
+	float ndotl = clamp(dot(normal, lightDir), 0.0, 1.0);
+	float bias = clamp(0.003 * (1.0 - ndotl), 0.0008, 0.008);
 
 	
 	float shadow = 0.0;
@@ -105,11 +105,11 @@ float CalcDirectionalShadowFactor(DirectionalLight light)
 
 	shadow /= 9.0;
 	
-	if(projCoords.z > 1.0)
+	if(projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 || projCoords.y < 0.0 || projCoords.y > 1.0)
 	{
 		shadow = 0.0;
-	}									
-	
+	}
+
 	return shadow;
 }
 
@@ -167,8 +167,32 @@ vec4 CalcLightByDirection(Light light, vec3 direction, float shadowFactor)
 
 vec4 CalcDirectionalLight()
 {
+	vec3 normal = Normal;
+	if (length(normal) > 0.001) {
+		normal = normalize(normal);
+	} else {
+		normal = vec3(0.0, 1.0, 0.0);
+	}
+
+	vec3 lightDir = normalize(-directionalLight.direction);
+	float ndotl = dot(normal, lightDir);
 	float shadowFactor = CalcDirectionalShadowFactor(directionalLight);
-	return CalcLightByDirection(directionalLight.base, directionalLight.direction, shadowFactor);
+	// The sun reaches around the body. A strict Lambert term left the camera-facing side on ambient only.
+	float sun = clamp(ndotl * 0.65 + 0.35, 0.0, 1.0) * (1.0 - shadowFactor);
+	vec3 key = directionalLight.base.colour * directionalLight.base.diffuseIntensity * sun * 2.6;
+	float sky = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+	vec3 fill = directionalLight.base.colour * directionalLight.base.ambientIntensity * mix(0.75, 1.25, sky);
+
+	vec3 specular = vec3(0.0);
+	if (ndotl > 0.0) {
+		vec3 fragToEye = normalize(eyePosition - FragPos);
+		vec3 reflected = normalize(reflect(-lightDir, normal));
+		float specularFactor = max(dot(fragToEye, reflected), 0.0);
+		specularFactor = pow(specularFactor, max(material.shininess, 1.0));
+		specular = directionalLight.base.colour * material.specularIntensity * specularFactor * (1.0 - shadowFactor);
+	}
+
+	return vec4(key + fill + specular, 1.0);
 }
 
 vec4 CalcPointLight(PointLight pLight, int shadowIndex)
@@ -255,7 +279,9 @@ void main()
 
 	vec4 lit = CalcDirectionalLight() + CalcPointLights() + CalcSpotLights();
 	float alpha = clamp(materialOpacity * texAlpha, 0.0, 1.0);
-	colour = vec4(surfaceColor * lit.rgb, alpha);
+	vec3 radiance = surfaceColor * lit.rgb;
+	radiance = radiance / (vec3(1.0) + radiance);
+	colour = vec4(radiance, alpha);
 }
 
 
