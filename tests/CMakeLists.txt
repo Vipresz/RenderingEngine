@@ -90,6 +90,15 @@ set(ENGINE_TEST_SOURCES
     core/ReplicationTypesTest.cpp
     core/ECSTest.cpp
     core/DeterministicMathTest.cpp
+    core/FixedTimestepTest.cpp
+    core/InputBufferTest.cpp
+    core/JoinAdmissionTest.cpp
+    core/ItemCombineRecipeTest.cpp
+    core/VitalsReplicationTest.cpp
+    core/InventoryActionTest.cpp
+    core/WorldDropReplicationTest.cpp
+    core/ColliderReplicationTest.cpp
+    core/SystemManagerTest.cpp
     core/SecurityHardeningTest.cpp
     core/SecureCompareTest.cpp
     core/UdpMessageAuthTest.cpp
