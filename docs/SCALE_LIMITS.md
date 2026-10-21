@@ -1,22 +1,22 @@
 # Scale limits
 
-These are the limits enforced by this engine's shard policy and replication budgets. AstralWorlds uses the same numbers for a zone.
+Numbers below are the defaults in `config/zone_default.json` and `core/network/ScalePolicyConfig.h`. A zone file can override them. This file does not describe another repository.
 
-## Supported today
+## What the default zone allows
 
-| Target | Status |
-|--------|--------|
-| 100–200 players per zone instance layer | Supported with replication layering, interest caps, and UDP batching |
-| 256 players per shard process | Supported (`shardHardCap`, overflow shard redirect) |
-| Cross-shard login routing | Supported via the gateway and `ShardRegistry` |
-| Mid-session zone handoff | Supported via `ZoneTransfer` and a signed `migrationToken` |
+| Limit | Where it comes from |
+|--------|---------------------|
+| 256 players on one shard | `shard.maxPlayers` and `scalePolicy.shardHardCap` in `config/zone_default.json`. `ShardRegistry` uses 256 when an endpoint omits `maxPlayers`. |
+| Overflow when that shard is full | `overflowShardId` plus login redirect. The client connects to the redirect host. |
+| Nearby interest, not a full-zone fanout | `layerFullRadius` 20, `layerMidRadius` 50, `layerFarRadius` 120. Observer caps are 64, or 20 when the cell is crowded. |
+| Login routed to the least-loaded live shard | `NetGateway` calls `ShardRegistry::SelectShardForLogin`. |
+| Mid-session move to another shard | `ZoneTransfer` and a signed `migrationToken`. The token stores the user id, source shard, target shard, and expiry. It does not store inventory. |
 
-## Not supported
+## What this engine does not do
 
-| Target | Reason |
-|--------|--------|
-| 1000 or more players on one shard process | The hard cap and the tick and replication budgets stop a single process there. Split the population with overflow shards and gateway routing. |
-| Seamless in-world cross-shard migration without a reconnect | The client reconnects to the target shard. The migration token keeps the user id and inventory. |
-| Global matchmaking or a dungeon finder | The gateway only redirects a login to the least-loaded shard. |
-
-`config/join_load_stress_scale.json` may raise caps while profiling. A production zone should stay at 256 players per shard.
+| Claim | What the code does instead |
+|--------|----------------------------|
+| 100–200 players per layer as a fixed cap | No such constant. The layer code routes logins on the shard cap above. |
+| 1000 players refused by the engine | Not a hard refusal. `config/join_load_stress_scale.json` sets `shardHardCap` to 1200, and `scripts/run_join_load_stress_profile.ps1` can run 1048 players. Keep a production zone at the 256-player file. |
+| Seamless cross-shard move with no reconnect | The client reconnects. `FollowRedirect` opens a new TCP session and sends the migration token. |
+| Matchmaking or a dungeon finder | The gateway only picks the registered shard with the lowest population that is still under its cap. |

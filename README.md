@@ -2,7 +2,7 @@
 
 C++17 library for ECS, fixed-timestep simulation, OpenGL rendering, and authoritative multiplayer.
 
-The window requests an OpenGL 4.3 context so ocean FFT compute shaders can run, and falls back to 3.3. Game and editor shaders stay on 3.3.
+The window tries an OpenGL 4.3 context first, then 3.3. Ocean FFT shaders are `#version 430`. Mesh, shadow, and terrain shaders are `#version 330`.
 
 ## Layout
 
@@ -26,9 +26,7 @@ cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
 ```
 
-`BUILD_ENGINE_EXAMPLES` defaults to ON and builds `basic_example` and `network_example`. `BUILD_ENGINE_PLATFORM` defaults to ON for a standalone configure, so the examples link the OpenGL platform library.
-
-AstralWorlds consumes this tree as a subdirectory and turns the examples off. The commands above are the ones that configure this repository by itself.
+A default configure builds `basic_example` and `network_example` and links them to the OpenGL platform library. Turning examples off also turns that library off unless `-DBUILD_ENGINE_PLATFORM=ON` is set.
 
 ## Tests
 
@@ -57,18 +55,14 @@ ctest --test-dir build-platform -C Release --output-on-failure -L platform --lab
 #include "platform/render/Shader.h"
 ```
 
-`examples/BasicExample.cpp` opens a window, draws a grid, and reads keyboard input. `examples/NetworkExample.cpp` is the networking sample.
+`examples/BasicExample.cpp` opens a window, draws a ground plane and a sphere, and moves that sphere from the keyboard. `examples/NetworkExample.cpp` runs a `NetServer` or a `NetClient`.
 
 ## Scale
 
-Shard caps, overflow, and what is not supported are in [docs/SCALE_LIMITS.md](docs/SCALE_LIMITS.md).
+Shard caps and what the networking code does not implement are in [docs/SCALE_LIMITS.md](docs/SCALE_LIMITS.md).
 
-Zone files live in `config/zone_default.json` and `config/join_load_stress_scale.json`. The stress runner is:
+`config/zone_default.json` is the 256-player zone. `config/join_load_scale.json` is the smaller join-load profile. `config/join_load_stress_scale.json` raises the cap for profiling. The stress runner is:
 
 ```powershell
 .\scripts\run_join_load_stress_profile.ps1 -Build
 ```
-
-## Related
-
-[Samsung Gear 360](https://github.com/Vipresz/SamsungGear360) is a separate viewer for that camera's dual-fisheye stream. It is not part of this library. A Raspberry Pi relay puts the camera on the local network, and its C++ and Python players can show the raw fisheye, a rectilinear view, or a draggable 360 view. Lens calibration can stitch the two lenses into one panorama.
