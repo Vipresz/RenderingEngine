@@ -199,13 +199,15 @@ void main()
 	spec *= (1.0 - roughness) * mix(0.04, 1.0, metallic);
 
 	vec3 lightColour = directionalLight.base.colour;
-	float sun = clamp(dot(mappedNormal, lightDir) * 0.65 + 0.35, 0.0, 1.0);
-	float sky = clamp(mappedNormal.y * 0.5 + 0.5, 0.0, 1.0);
-	vec3 fill = lightColour * directionalLight.base.ambientIntensity * mix(0.75, 1.25, sky) * occlusion;
-	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * sun * 2.6 * (1.0 - shadow);
-	vec3 lit = albedo * (1.0 - metallic) * (fill + diffuse);
-	lit += lightColour * spec * directionalLight.base.diffuseIntensity * 2.6 * (1.0 - shadow);
-	lit += emission;
-	lit = lit / (vec3(1.0) + lit);
-	colour = vec4(lit, 1.0);
+	float lit = max(dot(mappedNormal, lightDir), 0.0) * (1.0 - shadow);
+	float skyUp = clamp(mappedNormal.y * 0.5 + 0.5, 0.0, 1.0);
+	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), lightColour, 0.28);
+	vec3 scatter = skyColour * directionalLight.base.ambientIntensity * (1.7 + 2.1 * skyUp) * occlusion;
+	scatter += lightColour * directionalLight.base.diffuseIntensity * pow(max(lit, 0.0), 0.55) * 0.9;
+	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * lit * 2.4;
+	vec3 colourLit = albedo * (1.0 - metallic) * (scatter + diffuse);
+	colourLit += lightColour * spec * directionalLight.base.diffuseIntensity * 2.4 * (1.0 - shadow);
+	colourLit += emission;
+	colourLit = colourLit / (vec3(1.0) + colourLit);
+	colour = vec4(colourLit, 1.0);
 }

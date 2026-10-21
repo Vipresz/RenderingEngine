@@ -59,7 +59,7 @@ void main()
 		
 		// Apply bone transformation to vertex position and normal
 		finalPosition = boneTransform * finalPosition;
-		finalNormal = transpose(inverse(mat3(boneTransform))) * finalNormal;
+		finalNormal = mat3(boneTransform) * finalNormal;
 	}
 	
 	// Transform to world space, then view, then projection
