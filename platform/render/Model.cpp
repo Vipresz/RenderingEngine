@@ -157,7 +157,6 @@ bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePa
     m_minX = m_minY = m_minZ = std::numeric_limits<float>::max();
     m_maxX = m_maxY = m_maxZ = std::numeric_limits<float>::lowest();
     m_boundsCalculated = false;
-
     m_skipMeshesWithoutBones = false;
     for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi) {
         if (scene->mMeshes[mi]->HasBones()) {
@@ -166,7 +165,6 @@ bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePa
         }
     }
     m_skinnedMeshBoneNames.clear();
-
     LoadNode(scene->mRootNode, scene);
     LoadMaterials(scene);
 
@@ -174,7 +172,6 @@ bool Model::LoadModelFromScene(const aiScene* scene, const std::string& sourcePa
         LOG_ERROR_FMT("Model", "LoadModelFromScene: no meshes in %s", sourcePath.c_str());
         return false;
     }
-
     RecalculateBoundsFromLoadedMeshes();
     LOG_INFO_FMT("Model", "Model loaded: %zu meshes, height: %.2f", m_meshList.size(), GetHeight());
     return true;
@@ -732,7 +729,6 @@ void Model::ClearModel() {
     m_diffuseRgba.clear();
     m_diffuseW = 0;
     m_diffuseH = 0;
-
     m_heightGrid.clear();
     m_heightGridW = m_heightGridH = 0;
     m_terrainSizeX = m_terrainSizeZ = m_terrainHeightScale = 0.0f;

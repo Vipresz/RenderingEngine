@@ -68,27 +68,44 @@ bool NuklearUI::Initialize(GLFWwindow* window, FontLibrary* fontLibrary) {
     
     struct nk_font_atlas* atlas;
     nk_glfw3_font_stash_begin(m_nuklear, &atlas);
-#ifdef NK_INCLUDE_DEFAULT_FONT
-    struct nk_font_config playFontCfg = nk_font_config(m_fontLibrary ? m_fontLibrary->GetConfig().hudSize : 36.0f);
-    playFontCfg.range = nk_font_default_glyph_ranges();
-    playFontCfg.oversample_h = 1;
-    playFontCfg.oversample_v = 1;
-    const float playFontSize = m_fontLibrary ? m_fontLibrary->GetConfig().hudSize : 36.0f;
-    struct nk_font* defaultPlayFont = nk_font_atlas_add_default(atlas, playFontSize, &playFontCfg);
-    if (m_fontLibrary && defaultPlayFont) {
-        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::Hud, defaultPlayFont);
-        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiBold, defaultPlayFont);
-        m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiRegular, defaultPlayFont);
-    }
-#endif
+    // The editor has no font library. Leave the atlas empty so the bake installs
+    // Nuklear's 13px font and sets default_font. A pre-added 36px font skips that
+    // and, once selected, overflows the 18-30px rows.
+    // A font library still bakes its HUD face. That makes font_num non-zero, so
+    // default_font must be set here or the first window reads a null style font.
+    struct nk_font* defaultPlayFont = nullptr;
     if (m_fontLibrary) {
+#ifdef NK_INCLUDE_DEFAULT_FONT
+        struct nk_font_config playFontCfg = nk_font_config(m_fontLibrary->GetConfig().hudSize);
+        playFontCfg.range = nk_font_default_glyph_ranges();
+        playFontCfg.oversample_h = 1;
+        playFontCfg.oversample_v = 1;
+        defaultPlayFont = nk_font_atlas_add_default(atlas, m_fontLibrary->GetConfig().hudSize, &playFontCfg);
+        if (defaultPlayFont) {
+            atlas->default_font = defaultPlayFont;
+            m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::Hud, defaultPlayFont);
+            m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiBold, defaultPlayFont);
+            m_fontLibrary->SetBakedFont(Engine::Platform::UI::FontRole::UiRegular, defaultPlayFont);
+        }
+#endif
         m_fontLibrary->LoadChatFont(atlas);
     }
     nk_glfw3_font_stash_end(m_nuklear);
     if (m_fontLibrary) {
         m_fontLibrary->ApplyDefaultFont(m_nkContext);
     }
-    
+    if (!m_nkContext->style.font && defaultPlayFont) {
+        nk_style_set_font(m_nkContext, &defaultPlayFont->handle);
+    }
+    if (!m_nkContext->style.font) {
+        LOG_ERROR("NuklearUI", "Nuklear style font is null; the first window would crash");
+        nk_glfw3_shutdown(m_nuklear);
+        delete m_nuklear;
+        m_nuklear = nullptr;
+        m_nkContext = nullptr;
+        return false;
+    }
+
     m_nuklearInitialized = true;
     LOG_INFO("NuklearUI", m_fontLibrary && m_fontLibrary->HasAnyCustomFont()
         ? "Nuklear initialized with custom fonts"
