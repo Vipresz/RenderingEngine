@@ -13,13 +13,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(googletest)
 
-FetchContent_Declare(
-    glm
-    GIT_REPOSITORY https://github.com/g-truc/glm.git
-    GIT_TAG 1.0.1
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(glm)
+set(_engine_glm_dir "${CMAKE_CURRENT_SOURCE_DIR}/../libs/glm-1.0.2")
+if(EXISTS "${_engine_glm_dir}/glm/glm.hpp")
+    add_subdirectory("${_engine_glm_dir}" "${CMAKE_BINARY_DIR}/glm-submodule" EXCLUDE_FROM_ALL)
+else()
+    FetchContent_Declare(
+        glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 1.0.1
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(glm)
+endif()
 
 set(ENGINE_TEST_SUPPORT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/../core/scene/Scene.cpp

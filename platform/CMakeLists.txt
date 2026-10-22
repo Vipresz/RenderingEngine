@@ -108,8 +108,13 @@ target_include_directories(Platform PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>  # For engine headers
 )
 if(ENGINE_ENABLE_AUDIO)
+    set(ENGINE_MINIAUDIO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/miniaudio")
+    if(NOT EXISTS "${ENGINE_MINIAUDIO_DIR}/miniaudio.h")
+        message(FATAL_ERROR
+            "Missing third_party/miniaudio. Run: git submodule update --init third_party/miniaudio")
+    endif()
     target_include_directories(Platform PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../third_party/miniaudio>)
+        $<BUILD_INTERFACE:${ENGINE_MINIAUDIO_DIR}>)
     target_compile_definitions(Platform PUBLIC ENGINE_ENABLE_AUDIO)
     message(STATUS "Audio enabled via miniaudio")
 endif()
@@ -199,23 +204,11 @@ else()
     endif()
 endif()
 
-# ============================================================================
-# Copy required header files
-# ============================================================================
-
-# Copy stb_image.h from graphics/openGL_example to render directory if it doesn't exist
-set(STB_IMAGE_SOURCE "${PROJECT_ROOT}/graphics/openGL_example/stb_image.h")
-set(STB_IMAGE_DEST "${CMAKE_CURRENT_SOURCE_DIR}/render/stb_image.h")
-
-if(EXISTS "${STB_IMAGE_SOURCE}" AND NOT EXISTS "${STB_IMAGE_DEST}")
-    file(COPY "${STB_IMAGE_SOURCE}" DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/render/")
-    message(STATUS "Copied stb_image.h to render directory")
-elseif(NOT EXISTS "${STB_IMAGE_SOURCE}")
-    message(WARNING "stb_image.h not found at ${STB_IMAGE_SOURCE}")
-    message(WARNING "  Texture loading will not work without this file")
-elseif(EXISTS "${STB_IMAGE_DEST}")
-    message(STATUS "stb_image.h already exists in render directory")
+set(ENGINE_STB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb")
+if(NOT EXISTS "${ENGINE_STB_DIR}/stb_image.h")
+    message(FATAL_ERROR "Missing third_party/stb. Run: git submodule update --init third_party/stb")
 endif()
+target_include_directories(Platform PUBLIC "${ENGINE_STB_DIR}")
 
 # OpenGL support
 find_package(OpenGL REQUIRED)

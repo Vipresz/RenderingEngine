@@ -2,7 +2,7 @@
 
 #include "Logger.h"
 
-#include "render/stb_image.h"
+#include "stb_image.h"
 
 #include <algorithm>
 

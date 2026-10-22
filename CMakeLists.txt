@@ -16,6 +16,10 @@ else()
 endif()
 option(BUILD_ENGINE_PLATFORM "Build Platform library (OpenGL, rendering, etc.)" ${_engine_platform_default})
 
+if(NOT DEFINED NUKLEAR_DIR AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nuklear/nuklear.h")
+    set(NUKLEAR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nuklear" CACHE PATH "Nuklear submodule root")
+endif()
+
 # ============================================================================
 # Engine Library - Core simulation engine (ECS, timestep, jobs, etc.)
 # ============================================================================
