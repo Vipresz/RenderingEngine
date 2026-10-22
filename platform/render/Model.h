@@ -117,7 +117,7 @@ public:
     void CopySkinnedPositions(const std::vector<glm::mat4>& boneMatrices, std::vector<glm::vec3>& out) const;
     /// Resolved diffuse image, empty when the material has no file texture.
     const std::string& DiffuseTexturePath() const { return m_diffuseTexturePath; }
-    /// Sample the diffuse image. u and v repeat. v = 0 is the bottom of the image.
+    /// Repeat-wrap sample. v = 0 is the bottom of the image.
     bool SampleDiffuse(float u, float v, glm::vec3& rgb) const;
 
     // Check if model has any valid (non-null) textures

@@ -1132,11 +1132,35 @@ bool Model::SampleDiffuse(float u, float v, glm::vec3& rgb) const {
     }
     u = u - std::floor(u);
     v = v - std::floor(v);
-    const int x = std::clamp(static_cast<int>(std::lround(u * static_cast<float>(m_diffuseW - 1))), 0, m_diffuseW - 1);
-    const int y = std::clamp(static_cast<int>(std::lround((1.f - v) * static_cast<float>(m_diffuseH - 1))), 0,
-                             m_diffuseH - 1);
-    const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(m_diffuseW) + static_cast<size_t>(x)) * 4u;
-    rgb = glm::vec3(m_diffuseRgba[i], m_diffuseRgba[i + 1u], m_diffuseRgba[i + 2u]) / 255.f;
+    const int w = m_diffuseW;
+    const int h = m_diffuseH;
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+    // Cameras photograph this map at 720p. The body is ~200 px tall in those
+    // photos and ~2k texels on the map, so GL minifies by about eight texels.
+    constexpr int kFootprint = 8;
+    const float px = u * static_cast<float>(w);
+    const float py = (1.f - v) * static_cast<float>(h);
+    const int x0 = static_cast<int>(std::floor(px)) - kFootprint / 2;
+    const int y0 = static_cast<int>(std::floor(py)) - kFootprint / 2;
+    auto wrap = [](int i, int n) {
+        i %= n;
+        if (i < 0) {
+            i += n;
+        }
+        return i;
+    };
+    glm::vec3 acc(0.f);
+    for (int dy = 0; dy < kFootprint; ++dy) {
+        const int y = wrap(y0 + dy, h);
+        for (int dx = 0; dx < kFootprint; ++dx) {
+            const int x = wrap(x0 + dx, w);
+            const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+            acc += glm::vec3(m_diffuseRgba[i], m_diffuseRgba[i + 1u], m_diffuseRgba[i + 2u]);
+        }
+    }
+    rgb = acc / (255.f * static_cast<float>(kFootprint * kFootprint));
     return true;
 }
 
