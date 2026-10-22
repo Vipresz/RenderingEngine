@@ -201,13 +201,13 @@ void main()
 	vec3 lightColour = directionalLight.base.colour;
 	float lit = max(dot(mappedNormal, lightDir), 0.0) * (1.0 - shadow);
 	float skyUp = clamp(mappedNormal.y * 0.5 + 0.5, 0.0, 1.0);
-	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), lightColour, 0.28);
-	vec3 scatter = skyColour * directionalLight.base.ambientIntensity * (1.7 + 2.1 * skyUp) * occlusion;
-	scatter += lightColour * directionalLight.base.diffuseIntensity * pow(max(lit, 0.0), 0.55) * 0.9;
-	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * lit * 2.4;
-	vec3 colourLit = albedo * (1.0 - metallic) * (scatter + diffuse);
-	colourLit += lightColour * spec * directionalLight.base.diffuseIntensity * 2.4 * (1.0 - shadow);
+	vec3 groundColour = vec3(0.18, 0.16, 0.14);
+	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), lightColour, 0.22);
+	vec3 ambient = mix(groundColour, skyColour, skyUp) * directionalLight.base.ambientIntensity * occlusion;
+	vec3 diffuse = lightColour * directionalLight.base.diffuseIntensity * lit;
+	vec3 colourLit = albedo * (1.0 - metallic) * (ambient + diffuse);
+	colourLit += lightColour * spec * directionalLight.base.diffuseIntensity * (1.0 - shadow);
 	colourLit += emission;
-	colourLit = colourLit / (vec3(1.0) + colourLit);
+	colourLit = colourLit / (vec3(1.0) + colourLit * 0.25);
 	colour = vec4(colourLit, 1.0);
 }

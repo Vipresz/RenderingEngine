@@ -179,12 +179,12 @@ vec4 CalcDirectionalLight()
 	float shadowFactor = CalcDirectionalShadowFactor(directionalLight);
 	float lit = ndotl * (1.0 - shadowFactor);
 	vec3 sunColour = directionalLight.base.colour;
-	vec3 key = sunColour * directionalLight.base.diffuseIntensity * lit * 2.4;
+	vec3 key = sunColour * directionalLight.base.diffuseIntensity * lit;
 
 	float skyUp = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
-	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), sunColour, 0.28);
-	vec3 scatter = skyColour * directionalLight.base.ambientIntensity * (1.7 + 2.1 * skyUp);
-	scatter += sunColour * directionalLight.base.diffuseIntensity * pow(max(lit, 0.0), 0.55) * 0.9;
+	vec3 groundColour = vec3(0.18, 0.16, 0.14);
+	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), sunColour, 0.22);
+	vec3 ambient = mix(groundColour, skyColour, skyUp) * directionalLight.base.ambientIntensity;
 
 	vec3 specular = vec3(0.0);
 	if (ndotl > 0.0) {
@@ -195,7 +195,7 @@ vec4 CalcDirectionalLight()
 		specular = sunColour * material.specularIntensity * specularFactor * (1.0 - shadowFactor);
 	}
 
-	return vec4(key + scatter + specular, 1.0);
+	return vec4(key + ambient + specular, 1.0);
 }
 
 vec4 CalcPointLight(PointLight pLight, int shadowIndex)
@@ -283,7 +283,7 @@ void main()
 	vec4 lit = CalcDirectionalLight() + CalcPointLights() + CalcSpotLights();
 	float alpha = clamp(materialOpacity * texAlpha, 0.0, 1.0);
 	vec3 radiance = surfaceColor * lit.rgb;
-	radiance = radiance / (vec3(1.0) + radiance);
+	radiance = radiance / (vec3(1.0) + radiance * 0.25);
 	colour = vec4(radiance, alpha);
 }
 
