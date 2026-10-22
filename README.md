@@ -14,10 +14,17 @@ docs/          Scale limits
 examples/      basic_example and network_example
 scripts/       Stress profiles and the coverage check
 tests/         EngineTests
-third_party/   Nuklear
+third_party/   Nuklear, miniaudio, and stb submodules
+libs/          glm, glfw, glew, and assimp submodules
 ```
 
 ## Build
+
+Fetch the submodules first. `libs/` holds glm, glfw, glew, and assimp. `third_party/` holds Nuklear 4.13.3, miniaudio 0.11.25, and stb (`stb_image` 2.16).
+
+```powershell
+git submodule update --init
+```
 
 From this directory, with Visual Studio 2022:
 

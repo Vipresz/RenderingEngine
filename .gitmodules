@@ -10,3 +10,12 @@
 [submodule "libs/assimp-6.0.2"]
 	path = libs/assimp-6.0.2
 	url = https://github.com/assimp/assimp.git
+[submodule "third_party/nuklear"]
+	path = third_party/nuklear
+	url = https://github.com/Immediate-Mode-UI/Nuklear.git
+[submodule "third_party/miniaudio"]
+	path = third_party/miniaudio
+	url = https://github.com/mackron/miniaudio.git
+[submodule "third_party/stb"]
+	path = third_party/stb
+	url = https://github.com/nothings/stb.git
