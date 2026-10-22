@@ -44,7 +44,7 @@ void main()
     if (length(col) > 0.001) {
         vCol = vec4(col, 1.0f);
     } else {
-        vCol = vec4(clamp(pos, 0.0f, 1.0f), 1.0f);
+        vCol = vec4(0.7f, 0.7f, 0.7f, 1.0f);
     }
     
     // Pass texture coordinates

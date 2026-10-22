@@ -21,6 +21,9 @@ struct SunLight {
         travel = travelLen > 0.0001f ? travelDir / travelLen : glm::vec3(0.3f, -1.0f, 0.2f);
         const float sunLen = glm::length(towardSun);
         toSun = sunLen > 0.0001f ? towardSun / sunLen : -travel;
+        if (glm::dot(toSun, travel) > 0.0f) {
+            toSun = -travel;
+        }
         colour = lightColour;
         ambient = ambientIntensity;
         diffuse = diffuseIntensity;
@@ -28,7 +31,7 @@ struct SunLight {
 
 private:
     inline static glm::vec3 travel{0.3f, -1.0f, 0.2f};
-    inline static glm::vec3 toSun{0.3f, -1.0f, 0.2f};
+    inline static glm::vec3 toSun{-0.3f, 1.0f, -0.2f};
     inline static glm::vec3 colour{1.0f, 1.0f, 1.0f};
     inline static float ambient = 0.3f;
     inline static float diffuse = 0.7f;
