@@ -51,7 +51,8 @@ void CharacterMovementSimulator::SimulateStep(CharacterMovementState& state,
     if (command.fly) {
         glm::vec3 moveDirection(command.moveX, command.moveY, command.moveZ);
         const bool isMoving = glm::length(moveDirection) > 0.0001f;
-        const float currentMovementSpeed = std::max(0.0f, command.movementSpeed);
+        constexpr float kDevFlightSpeedScale = 100.0f;
+        const float currentMovementSpeed = std::max(0.0f, command.movementSpeed) * kDevFlightSpeedScale;
         if (isMoving) {
             moveDirection = glm::normalize(moveDirection);
         }

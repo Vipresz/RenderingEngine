@@ -174,25 +174,28 @@ vec4 CalcDirectionalLight()
 		normal = vec3(0.0, 1.0, 0.0);
 	}
 
-	vec3 lightDir = normalize(-directionalLight.direction);
-	float ndotl = dot(normal, lightDir);
+	vec3 toSun = normalize(-directionalLight.direction);
+	float ndotl = max(dot(normal, toSun), 0.0);
 	float shadowFactor = CalcDirectionalShadowFactor(directionalLight);
-	// The sun reaches around the body. A strict Lambert term left the camera-facing side on ambient only.
-	float sun = clamp(ndotl * 0.65 + 0.35, 0.0, 1.0) * (1.0 - shadowFactor);
-	vec3 key = directionalLight.base.colour * directionalLight.base.diffuseIntensity * sun * 2.6;
-	float sky = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
-	vec3 fill = directionalLight.base.colour * directionalLight.base.ambientIntensity * mix(0.75, 1.25, sky);
+	float lit = ndotl * (1.0 - shadowFactor);
+	vec3 sunColour = directionalLight.base.colour;
+	vec3 key = sunColour * directionalLight.base.diffuseIntensity * lit * 2.4;
+
+	float skyUp = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+	vec3 skyColour = mix(vec3(0.42, 0.58, 0.82), sunColour, 0.28);
+	vec3 scatter = skyColour * directionalLight.base.ambientIntensity * (1.7 + 2.1 * skyUp);
+	scatter += sunColour * directionalLight.base.diffuseIntensity * pow(max(lit, 0.0), 0.55) * 0.9;
 
 	vec3 specular = vec3(0.0);
 	if (ndotl > 0.0) {
 		vec3 fragToEye = normalize(eyePosition - FragPos);
-		vec3 reflected = normalize(reflect(-lightDir, normal));
+		vec3 reflected = normalize(reflect(-toSun, normal));
 		float specularFactor = max(dot(fragToEye, reflected), 0.0);
 		specularFactor = pow(specularFactor, max(material.shininess, 1.0));
-		specular = directionalLight.base.colour * material.specularIntensity * specularFactor * (1.0 - shadowFactor);
+		specular = sunColour * material.specularIntensity * specularFactor * (1.0 - shadowFactor);
 	}
 
-	return vec4(key + fill + specular, 1.0);
+	return vec4(key + scatter + specular, 1.0);
 }
 
 vec4 CalcPointLight(PointLight pLight, int shadowIndex)

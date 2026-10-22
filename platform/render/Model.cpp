@@ -269,12 +269,12 @@ void Model::LoadMesh(aiMesh* mesh, const aiScene* /*scene*/) {
             vertices.insert(vertices.end(), { 0.0f, 0.0f });
         }
         
-        // Normals (flipped for OpenGL coordinate system); Assimp may omit normals on helper meshes.
+        // Keep the authored normal. Negating it lights the side that faces away from the sun.
         if (mesh->HasNormals()) {
             vertices.insert(vertices.end(), {
-                -mesh->mNormals[i].x,
-                -mesh->mNormals[i].y,
-                -mesh->mNormals[i].z
+                mesh->mNormals[i].x,
+                mesh->mNormals[i].y,
+                mesh->mNormals[i].z
             });
         } else {
             vertices.insert(vertices.end(), { 0.0f, 1.0f, 0.0f });

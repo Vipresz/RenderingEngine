@@ -77,7 +77,13 @@ void main() {
 	vec3 reflected = sky;
 	if (u_has_scene != 0) {
 		vec2 uv = (gl_FragCoord.xy - u_viewport.xy) / max(u_viewport.zw, vec2(1.0));
+		float centerDepth = texture(u_scene_depth, uv).r;
 		vec2 refractUv = clamp(uv + normal.xz * 0.018 * (1.0 - fresnel), vec2(0.001), vec2(0.999));
+		float sampleDepth = texture(u_scene_depth, refractUv).r;
+		// A closer depth is the character in front of the water. Sampling it paints a halo on the silhouette.
+		if (sampleDepth + 0.0008 < centerDepth) {
+			refractUv = uv;
+		}
 		transmitted = texture(u_scene, refractUv).rgb;
 		transmitted = mix(transmitted, transmitted * vec3(0.35, 0.85, 0.92), 0.35);
 
@@ -97,6 +103,13 @@ void main() {
 				float sceneDepth = texture(u_scene_depth, reflectUv).r;
 				vec4 sceneH = u_inv_pv * vec4(reflectUv * 2.0 - 1.0, sceneDepth * 2.0 - 1.0, 1.0);
 				vec3 sceneWorld = sceneH.xyz / max(sceneH.w, 0.0001);
+				float sceneDist = length(sceneWorld - u_camera_pos);
+				float rayDist = length(samplePos - u_camera_pos);
+				// The character stands between the camera and the water. That is not a reflection.
+				if (sceneDist + 1.0 < rayDist) {
+					travel += 4.0 + float(i);
+					continue;
+				}
 				if (sceneWorld.y > u_sea_level + 0.2 && abs(sceneWorld.y - samplePos.y) < 2.5) {
 					reflected = texture(u_scene, reflectUv).rgb;
 					break;
