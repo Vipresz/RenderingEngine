@@ -40,6 +40,8 @@ public:
     bool SetTcpNoDelay(bool enabled);
 
     bool Bind(const std::string& host, uint16_t port);
+    // Port assigned by the kernel after Bind, including when Bind was asked for port 0.
+    uint16_t LocalPort() const;
     bool Listen(int backlog = 8);
     bool Connect(const std::string& host, uint16_t port);
     bool Accept(Socket& outClient);

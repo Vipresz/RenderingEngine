@@ -161,6 +161,26 @@ bool Socket::Bind(const std::string& host, uint16_t port) {
     return bound;
 }
 
+uint16_t Socket::LocalPort() const {
+    if (!IsValid()) {
+        return 0;
+    }
+
+    sockaddr_in address{};
+    int length = static_cast<int>(sizeof(address));
+#ifdef _WIN32
+    const int result = getsockname(ToNative(m_handle), reinterpret_cast<sockaddr*>(&address), &length);
+#else
+    socklen_t lengthPosix = static_cast<socklen_t>(length);
+    const int result =
+        getsockname(ToNative(m_handle), reinterpret_cast<sockaddr*>(&address), &lengthPosix);
+#endif
+    if (result != 0 || address.sin_family != AF_INET) {
+        return 0;
+    }
+    return ntohs(address.sin_port);
+}
+
 bool Socket::Listen(int backlog) {
     if (!IsValid()) {
         return false;

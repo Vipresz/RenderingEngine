@@ -27,6 +27,7 @@ public:
     bool Start(const std::string& host, uint16_t port);
     void Stop();
     bool IsRunning() const { return m_running.load(std::memory_order_acquire); }
+    uint16_t ListenPort() const { return m_listenSocket.LocalPort(); }
 
     Engine::Net::ShardRegistry& GetRegistry() { return m_registry; }
     const Engine::Net::ShardRegistry& GetRegistry() const { return m_registry; }

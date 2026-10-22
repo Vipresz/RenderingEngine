@@ -33,19 +33,24 @@ bool NetGateway::Start(const std::string& host, uint16_t port) {
         return true;
     }
 
-    m_listenSocket = Socket::CreateTcp();
-    if (!m_listenSocket.IsValid()) {
+    if (!Socket::InitializeNetworking()) {
         return false;
     }
-    m_listenSocket.SetReuseAddress(true);
-    if (!m_listenSocket.Bind(host, port) || !m_listenSocket.Listen()) {
+
+    m_listenSocket = Socket::CreateTcp();
+    if (!m_listenSocket.IsValid() ||
+        !m_listenSocket.SetReuseAddress(true) ||
+        !m_listenSocket.SetNonBlocking(true) ||
+        !m_listenSocket.Bind(host, port) ||
+        !m_listenSocket.Listen()) {
+        LOG_ERROR_FMT("NetGateway", "Failed to bind/listen on %s:%u", host.c_str(), static_cast<unsigned>(port));
         m_listenSocket.Close();
         return false;
     }
 
     m_running.store(true, std::memory_order_release);
     m_ioThread = std::thread([this]() { IoLoop(); });
-    LOG_INFO_FMT("NetGateway", "Gateway listening on %s:%u", host.c_str(), port);
+    LOG_INFO_FMT("NetGateway", "Gateway listening on %s:%u", host.c_str(), static_cast<unsigned>(ListenPort()));
     return true;
 }
 

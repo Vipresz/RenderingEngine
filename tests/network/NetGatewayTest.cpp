@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include "TestPort.h"
 #include "network/NetGateway.h"
 #include "network/NetworkConnection.h"
 #include "network/Socket.h"
@@ -12,8 +11,11 @@
 
 TEST(NetGatewayTest, RedirectsLoginToRegisteredShard) {
     Engine::Platform::Networking::NetGateway gateway;
-    const uint16_t port = Engine::Tests::AllocateEphemeralTestPort(61);
-    ASSERT_TRUE(gateway.Start("127.0.0.1", port));
+    // Port 0 lets the kernel pick a free port. A guessed port in the Linux
+    // ephemeral range fails bind immediately when that port is already taken.
+    ASSERT_TRUE(gateway.Start("127.0.0.1", 0));
+    const uint16_t port = gateway.ListenPort();
+    ASSERT_NE(port, 0);
 
     Engine::Net::ShardEndpoint shard;
     shard.shardId = 7;
